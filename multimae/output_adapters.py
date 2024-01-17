@@ -508,8 +508,8 @@ class ConvNeXtAdapter(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.preds_per_patch = preds_per_patch
-        self.class_dim = embed_dim // preds_per_patch
-        self.num_classes = num_classes
+        self.class_dim = int(embed_dim // preds_per_patch)
+        self.num_classes = int(num_classes)
         self.interpolate_mode = interpolate_mode
 
         self.blocks = nn.Sequential(*[

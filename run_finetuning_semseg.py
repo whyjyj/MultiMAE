@@ -176,8 +176,8 @@ def get_args():
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
 
     # Dataset parameters
-    parser.add_argument('--num_classes', default=150, type=str, help='number of semantic classes')
-    parser.add_argument('--dataset_name', default='ade20k', type=str, help='dataset name for plotting')
+    parser.add_argument('--num_classes', default=40, type=str, help='number of semantic classes')
+    parser.add_argument('--dataset_name', default='nyuv2', type=str, help='dataset name for plotting')
     parser.add_argument('--data_path', default=data_constants.ADE_TRAIN_PATH, type=str, help='dataset path')
     parser.add_argument('--eval_data_path', default=data_constants.ADE_VAL_PATH, type=str,
                         help='dataset path for evaluation')
@@ -190,7 +190,7 @@ def get_args():
                         help='set label 0 to ignore, reduce all other labels by 1')
     parser.add_argument('--seg_use_void_label', action='store_true', help='label border as void instead of ignore')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default=None,
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -230,11 +230,11 @@ def get_args():
     parser.set_defaults(fp16=True)
 
     # Wandb logging
-    parser.add_argument('--log_wandb', default=False, action='store_true',
+    parser.add_argument('--log_wandb', default=True, action='store_true',
                         help='log training and validation metrics to wandb')
-    parser.add_argument('--wandb_project', default=None, type=str,
+    parser.add_argument('--wandb_project', default='URP_NYUv2', type=str,
                         help='log training and validation metrics to wandb')
-    parser.add_argument('--wandb_entity', default=None, type=str,
+    parser.add_argument('--wandb_entity', default='URP', type=str,
                         help='user or team name of wandb')
     parser.add_argument('--wandb_run_name', default=None, type=str,
                         help='run name on wandb')
