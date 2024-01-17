@@ -176,7 +176,7 @@ def get_args():
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
 
     # Dataset parameters
-    parser.add_argument('--num_classes', default=40, type=str, help='number of semantic classes')
+    parser.add_argument('--num_classes', default=40, type=int, help='number of semantic classes')
     parser.add_argument('--dataset_name', default='nyuv2', type=str, help='dataset name for plotting')
     parser.add_argument('--data_path', default=data_constants.ADE_TRAIN_PATH, type=str, help='dataset path')
     parser.add_argument('--eval_data_path', default=data_constants.ADE_VAL_PATH, type=str,
