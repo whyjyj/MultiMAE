@@ -37,7 +37,7 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 20
+eval_freq: 200
 
 # Misc.
 find_unused_params: False
