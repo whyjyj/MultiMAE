@@ -306,6 +306,7 @@ def main(args):
 
     sampler_train = torch.utils.data.RandomSampler(dataset_train)
     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+    
     if dataset_test is not None:
         sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
