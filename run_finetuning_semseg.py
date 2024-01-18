@@ -744,17 +744,8 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
         # Void label is equal to num_classes
         seg_gt[seg_gt == num_classes] = ignore_index
 
-    # Collect metrics from all devices
-    if dist_on == 'cpu':
-        all_seg_preds = collect_results_cpu(seg_preds, size, tmpdir=None)
-        all_seg_gts = collect_results_cpu(seg_gts, size, tmpdir=None)
-    elif dist_on == 'gpu':
-        world_size = utils.get_world_size()
-        all_seg_preds = [None for _ in range(world_size)]
-        all_seg_gts = [None for _ in range(world_size)]
-        # gather all result part
-        dist.all_gather_object(all_seg_preds, seg_preds)
-        dist.all_gather_object(all_seg_gts, seg_gts)
+    all_seg_preds = seg_preds
+    all_seg_gts = seg_gts
 
     ret_metrics_mean = torch.zeros(3, dtype=float, device=device)
 
