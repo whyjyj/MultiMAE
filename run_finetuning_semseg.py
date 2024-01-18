@@ -41,7 +41,7 @@ from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
 from utils.datasets_semseg import build_semseg_dataset, simple_transform
-from utils.dist import collect_results_cpu
+# from utils.dist import collect_results_cpu
 from utils.log_images import log_semseg_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
