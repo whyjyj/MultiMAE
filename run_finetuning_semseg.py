@@ -176,7 +176,7 @@ def get_args():
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
 
     # Dataset parameters
-    parser.add_argument('--num_classes', default=40, type=str, help='number of semantic classes')
+    parser.add_argument('--num_classes', default=40, type=int, help='number of semantic classes')
     parser.add_argument('--dataset_name', default='nyuv2', type=str, help='dataset name for plotting')
     parser.add_argument('--data_path', default=data_constants.ADE_TRAIN_PATH, type=str, help='dataset path')
     parser.add_argument('--eval_data_path', default=data_constants.ADE_VAL_PATH, type=str,
@@ -265,7 +265,6 @@ def get_args():
 
 
 def main(args):
-    utils.init_distributed_mode(args)
     device = torch.device(args.device)
 
     # fix the seed for reproducibility
@@ -304,34 +303,13 @@ def main(args):
     else:
         dataset_test = None
 
-    if True:  # args.distributed:
-        num_tasks = utils.get_world_size()
-        global_rank = utils.get_rank()
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, drop_last=True,
-        )
-        print("Sampler_train = %s" % str(sampler_train))
-        if args.dist_eval:
-            if len(dataset_val) % num_tasks != 0:
-                print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                      'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                      'equal num of samples per-process.')
-            sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-            if dataset_test is not None:
-                sampler_test = torch.utils.data.DistributedSampler(
-                    dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-        else:
-            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-            if dataset_test is not None:
-                sampler_test = torch.utils.data.SequentialSampler(dataset_test)
-    else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-        if dataset_test is not None:
-            sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
-    if global_rank == 0 and args.log_wandb:
+    sampler_train = torch.utils.data.RandomSampler(dataset_train)
+    sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+    if dataset_test is not None:
+        sampler_test = torch.utils.data.SequentialSampler(dataset_test)
+
+    if args.log_wandb:
         log_writer = utils.WandbLogger(args)
     else:
         log_writer = None
@@ -460,9 +438,6 @@ def main(args):
     skip_weight_decay_list = model.no_weight_decay()
     print("Skip weight decay list: ", skip_weight_decay_list)
 
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-        model_without_ddp = model.module
 
     optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
@@ -514,8 +489,6 @@ def main(args):
     start_time = time.time()
     max_miou = 0.0
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
         train_stats = train_one_epoch(
