@@ -750,8 +750,8 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
     ret_metrics_mean = torch.zeros(3, dtype=float, device=device)
 
     if utils.is_main_process():
-        ordered_seg_preds = [result for result_part in all_seg_preds for result in result_part]
-        ordered_seg_gts = [result for result_part in all_seg_gts for result in result_part]
+        ordered_seg_preds = all_seg_preds
+        ordered_seg_gts = all_seg_gts
 
         ret_metrics = mean_iou(results=ordered_seg_preds,
                                gt_seg_maps=ordered_seg_gts,
@@ -769,7 +769,7 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
         # cat_iou = ret_metrics[2]
 
     # broadcast metrics from 0 to all nodes
-    dist.broadcast(ret_metrics_mean, 0)
+    # dist.broadcast(ret_metrics_mean, 0)
     pix_acc, mean_acc, miou = ret_metrics_mean
     ret = dict(pixel_accuracy=pix_acc, mean_accuracy=mean_acc, mean_iou=miou)
     return ret
