@@ -463,7 +463,7 @@ def main(args):
     model = create_model(
         args.model,
         input_adapters=input_adapters,
-        output_adapters=f,
+        output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
     )
 
@@ -754,6 +754,7 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
+            
             # 세그멘테이션 손실 계산
             seg_loss = 0
             if 'semseg' in tasks_dict:
@@ -771,8 +772,10 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
 
             # 총 손실 계산 및 역전파
             loss = seg_loss + depth_loss
-            
+
         loss_value = loss.item()
+        seg_loss_value = seg_loss.item()
+        depth_loss_value = depth_loss.item()
 
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
@@ -786,6 +789,8 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
 
         # Metrics and logging
         metric_logger.update(loss=loss_value)
+        metric_logger.update(seg_loss=seg_loss_value)
+        metric_logger.update(depth_loss=depth_loss_value)
         if fp16:
             metric_logger.update(loss_scale=loss_scale_value)
         min_lr = 10.
