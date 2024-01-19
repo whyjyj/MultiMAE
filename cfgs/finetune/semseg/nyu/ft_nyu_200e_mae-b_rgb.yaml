@@ -37,13 +37,13 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 20
+eval_freq: 200
 
 # Misc.
 find_unused_params: False
 
 # Wandb and logging
-log_wandb: False # Set to True to log to Weights & Biases
+log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: 'multimae-finetune-semseg'
 wandb_entity: null # Change if needed
 wandb_run_name: 'ft_nyu_200e_mae-b_rgb'
