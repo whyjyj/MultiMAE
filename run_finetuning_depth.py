@@ -325,13 +325,6 @@ def main(args):
     if not args.show_user_warnings:
         warnings.filterwarnings("ignore", category=UserWarning)
 
-    num_tasks = utils.get_world_size()
-    global_rank = utils.get_rank()
-
-    if global_rank == 0 and args.log_wandb:
-        log_writer = utils.WandbLogger(args)
-    else:
-        log_writer = None
 
     args.in_domains = args.in_domains.split('-')
     args.out_domains = ['depth']
@@ -460,6 +453,7 @@ def main(args):
     model.to(device)
 
     model_without_ddp = model
+    
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print("Model = %s" % str(model_without_ddp))
@@ -528,9 +522,6 @@ def main(args):
                              return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
         print(f"Performance of the network on the {len(dataset_val)} validation images")
         print(f"Loss {val_stats['loss']:.3f}")
-        if log_writer is not None:
-            log_writer.set_step(args.start_epoch * num_training_steps_per_epoch)
-            log_writer.update({**{f'val/{k}': v for k, v in val_stats.items()}, 'epoch': args.start_epoch})
         exit(0)
 
 

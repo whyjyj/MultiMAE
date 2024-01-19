@@ -17,35 +17,108 @@
 import argparse
 import datetime
 import json
+import math
 import os
+import sys
 import time
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List, Optional, Union
 
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
+from einops import rearrange
 
 import utils
 import utils.data_constants as data_constants
 from multimae import multimae
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
-                                      SegmenterMaskTransformerAdapter,MultitaskDPTOutputAdapter)
+                                      SegmenterMaskTransformerAdapter)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
-from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
+from utils.data_constants import COCO_SEMSEG_NUM_CLASSES, NYU_MEAN, NYU_STD
 from utils.datasets_semseg import build_semseg_dataset, simple_transform
-# from utils.dist import collect_results_cpu
-from utils.log_images import log_semseg_wandb
+from utils.dataset_regression import build_regression_dataset, nyu_transform
+from utils.log_images import log_semseg_wandb, log_taskonomy_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
+
+def masked_mse_loss(preds, target, mask_valid=None):
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+    element_wise_loss = (preds - target)**2
+    element_wise_loss[~mask_valid] = 0
+    return element_wise_loss.sum() / mask_valid.sum()
+
+
+def masked_l1_loss(preds, target, mask_valid=None):
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+    element_wise_loss = abs(preds - target)
+    element_wise_loss[~mask_valid] = 0
+    return element_wise_loss.sum() / mask_valid.sum()
+
+
+def masked_berhu_loss(preds, target, mask_valid=None):
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+
+    diff = preds - target
+    diff[~mask_valid] = 0
+    with torch.no_grad():
+        c = max(torch.abs(diff).max() * 0.2, 1e-5)
+
+    l1_loss = torch.abs(diff)
+    l2_loss = (torch.square(diff) + c**2) / 2. / c
+    berhu_loss = l1_loss[torch.abs(diff) < c].sum() + l2_loss[torch.abs(diff) >= c].sum()
+
+    return berhu_loss / mask_valid.sum()
+
+@torch.no_grad()
+def masked_nyu_metrics(preds, target, mask_valid=None):
+    # map to the original scale 
+    preds = preds * NYU_STD + NYU_MEAN
+    target = target * NYU_STD + NYU_MEAN
+
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+
+    n = mask_valid.sum()
+    
+    diff = torch.abs(preds - target)
+    diff[~mask_valid] = 0
+    
+    max_rel = torch.maximum(preds/torch.clamp_min(target, 1e-6), target/torch.clamp_min(preds, 1e-6))
+    max_rel = max_rel[mask_valid]
+
+    log_diff = torch.log(torch.clamp_min(preds, 1e-6)) - torch.log(torch.clamp_min(target, 1e-6))
+    log_diff[~mask_valid] = 0
+
+    metrics = {
+        'rmse': (diff.square().sum() / n).sqrt(),
+        'rel': (diff/torch.clamp_min(target, 1e-6))[mask_valid].mean(),
+        'srel': (diff**2/torch.clamp_min(target, 1e-6))[mask_valid].mean(),
+        'log10': (log_diff.square().sum() / n).sqrt(),
+        'delta_1': (max_rel < 1.25).float().mean(),
+        'delta_2': (max_rel < (1.25**2)).float().mean(),
+        'delta_3': (max_rel < (1.25**3)).float().mean(),
+    }
+    return metrics
+
 
 DOMAIN_CONF = {
     'rgb': {
@@ -82,14 +155,16 @@ def get_args():
     parser.add_argument('-c', '--config', default='', type=str, metavar='FILE',
                         help='YAML config file specifying default arguments')
 
-    parser = argparse.ArgumentParser('MultiMAE semantic segmentation fine-tuning script', add_help=False)
+    parser = argparse.ArgumentParser('MultiMAE Multitask fine-tuning script', add_help=False)
     parser.add_argument('--batch_size', default=4, type=int, help='Batch size per GPU')
     parser.add_argument('--epochs', default=64, type=int)
-    parser.add_argument('--save_ckpt_freq', default=20, type=int)
+    parser.add_argument('--save_ckpt_freq', default=200, type=int)
 
     # Task parameters
     parser.add_argument('--in_domains', default='rgb', type=str,
                         help='Input domain names, separated by hyphen')
+    parser.add_argument('--decoder_main_tasks', type=str, default='rgb',
+                        help='for convnext & DPT adapters, separate tasks with a hyphen')
     parser.add_argument('--standardize_depth', action='store_true')
     parser.add_argument('--no_standardize_depth', action='store_false', dest='standardize_depth')
     parser.set_defaults(standardize_depth=True)
@@ -117,7 +192,7 @@ def get_args():
     parser.set_defaults(learnable_pos_emb=False)
 
     parser.add_argument('--output_adapter', type=str, default='convnext',
-                        choices=['segmenter', 'convnext', 'dpt','multidpt'],
+                        choices=['segmenter', 'convnext', 'dpt'],
                         help='One of [segmenter,  convnext, dpt] (default: convnext)')
     parser.add_argument('--decoder_dim', default=6144, type=int,
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
@@ -125,7 +200,7 @@ def get_args():
                         help='Depth of decoder (for convnext and segmenter adapters')
     parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
-    parser.add_argument('--decoder_preds_per_patch', type=int, default=16,
+    parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
     parser.add_argument('--decoder_interpolate_mode', type=str, default='bilinear',
                         choices=['bilinear', 'nearest'], help='for convnext adapter')
@@ -171,9 +246,12 @@ def get_args():
     parser.add_argument('--aug_name', type=str, default='simple',
                         choices=['simple'],
                         help='One of [simple] (default: simple)')
-
+    parser.add_argument('--color_augs', default=False, action='store_true')
+    parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
     # Finetuning parameters
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--loss', default='berhu',
+                        help='Loss to use. One of [l1, l2, berhu] (default: berhu)')
 
     # Dataset parameters
     parser.add_argument('--num_classes', default=40, type=int, help='number of semantic classes')
@@ -279,7 +357,7 @@ def main(args):
         warnings.filterwarnings("ignore", category=UserWarning)
 
     args.in_domains = args.in_domains.split('-')
-    args.out_domains = ['semseg']
+    args.out_domains = ['semseg','depth']
     args.all_domains = list(set(args.in_domains) | set(args.out_domains))
     if args.use_mask_valid:
         args.all_domains.append('mask_valid')
@@ -376,12 +454,16 @@ def main(args):
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size,
         ),
+        'depth' : adapters_dict[args.output_adapter](num_classes=DOMAIN_CONF['depth']['channels'],
+            stride_level=DOMAIN_CONF['depth']['stride_level'],
+            patch_size=args.patch_size,
+            main_tasks=args.decoder_main_tasks)
     }
 
     model = create_model(
         args.model,
         input_adapters=input_adapters,
-        output_adapters=output_adapters,
+        output_adapters=f,
         drop_path_rate=args.drop_path_encoder,
     )
 
@@ -418,6 +500,17 @@ def main(args):
     print("Model = %s" % str(model_without_ddp))
     print('number of params: {} M'.format(n_parameters / 1e6))
 
+    if args.loss == 'l1':
+        tasks_loss_fn = {
+            'depth': masked_l1_loss
+        }
+    elif args.loss == 'berhu':
+        tasks_loss_fn = {
+            'depth': masked_berhu_loss
+        }
+    else:
+        raise NotImplementedError
+    
     total_batch_size = args.batch_size * utils.get_world_size()
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
 
@@ -467,38 +560,48 @@ def main(args):
         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
     if args.eval:
-        val_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_val,
+        seg_val_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_val,
                              device=device, epoch=-1, in_domains=args.in_domains,
                              num_classes=args.num_classes, dataset_name=args.dataset_name, mode='val',
                              fp16=args.fp16, return_all_layers=return_all_layers)
         print(f"Performance of the network on the {len(dataset_val)} validation images")
-        miou, a_acc, acc, loss = val_stats['mean_iou'], val_stats['pixel_accuracy'], val_stats['mean_accuracy'], val_stats['loss']
+        miou, a_acc, acc, loss = seg_val_stats['mean_iou'], seg_val_stats['pixel_accuracy'], seg_val_stats['mean_accuracy'], seg_val_stats['loss']
         print(f'* mIoU {miou:.3f} aAcc {a_acc:.3f} Acc {acc:.3f} Loss {loss:.3f}')
+        
+        depth_val_stats = evaluate_depth(model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
+                             device=device, epoch=-1, in_domains=args.in_domains, mode='val', log_images=True,
+                             return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
+        print(f"Performance of the network on the {len(dataset_val)} validation images")
+        print(f"Loss {depth_val_stats['loss']:.3f}")
         exit(0)
 
     if args.test:
-        test_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_test,
+        seg_test_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_test,
                               device=device, epoch=-1, in_domains=args.in_domains,
                               num_classes=args.num_classes, dataset_name=args.dataset_name, mode='test',
                               fp16=args.fp16, return_all_layers=return_all_layers)
         print(f"Performance of the network on the {len(dataset_test)} test images")
-        miou, a_acc, acc, loss = test_stats['mean_iou'], test_stats['pixel_accuracy'], test_stats['mean_accuracy'], test_stats['loss']
+        miou, a_acc, acc, loss = seg_test_stats['mean_iou'], seg_test_stats['pixel_accuracy'], seg_test_stats['mean_accuracy'], seg_test_stats['loss']
         print(f'* mIoU {miou:.3f} aAcc {a_acc:.3f} Acc {acc:.3f} Loss {loss:.3f}')
         exit(0)
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_miou = 0.0
+    min_val_loss = np.inf
     for epoch in range(args.start_epoch, args.epochs):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
+
         train_stats = train_one_epoch(
-            model=model, criterion=criterion, data_loader=data_loader_train,
+            model=model, tasks_loss_fn=tasks_loss_fn, criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
-            lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, in_domains=args.in_domains,
-            fp16=args.fp16, return_all_layers=return_all_layers
+            lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, 
+            in_domains=args.in_domains, fp16=args.fp16, return_all_layers=return_all_layers,
+            log_images=log_images
         )
+
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
@@ -507,27 +610,42 @@ def main(args):
 
         if data_loader_val is not None and (epoch % args.eval_freq == 0 or epoch == args.epochs - 1):
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
-            val_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_val,
-                                 device=device, epoch=epoch, in_domains=args.in_domains,
-                                 num_classes=args.num_classes, log_images=log_images, 
-                                 dataset_name=args.dataset_name, mode='val', fp16=args.fp16,
-                                 return_all_layers=return_all_layers)
-            if max_miou < val_stats["mean_iou"]:
-                max_miou = val_stats["mean_iou"]
+
+            seg_val_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_val,
+                                        device=device, epoch=epoch, in_domains=args.in_domains,
+                                        num_classes=args.num_classes, log_images=log_images, 
+                                        dataset_name=args.dataset_name, mode='val', fp16=args.fp16,
+                                        return_all_layers=return_all_layers)
+
+            depth_val_stats = evaluate_depth(model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
+                                            device=device, epoch=epoch, in_domains=args.in_domains, log_images=log_images,
+                                            mode='val', return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
+
+            if max_miou < seg_val_stats["mean_iou"]:
+                max_miou = seg_val_stats["mean_iou"]
                 if args.output_dir and args.save_ckpt:
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                         loss_scaler=loss_scaler, epoch="best")
-            print(f'Max mIoU: {max_miou:.3f}')
+                print(f'Max mIoU: {max_miou:.3f}')
+
+            if min_val_loss > depth_val_stats["loss"]:
+                min_val_loss = depth_val_stats["loss"]
+                if args.output_dir and args.save_ckpt:
+                    utils.save_model(
+                        args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                        loss_scaler=loss_scaler, epoch="best")
+                print(f'New best val loss: {min_val_loss:.3f}')
 
             log_stats = {**{f'train/{k}': v for k, v in train_stats.items()},
-                         **{f'val/{k}': v for k, v in val_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+                        **{f'val_seg/{k}': v for k, v in seg_val_stats.items()},
+                        **{f'val_depth/{k}': v for k, v in depth_val_stats.items()},
+                        'epoch': epoch,
+                        'n_parameters': n_parameters}
         else:
             log_stats = {**{f'train/{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+                        'epoch': epoch,
+                        'n_parameters': n_parameters}
 
         if log_writer is not None:
             log_writer.update(log_stats)
@@ -540,35 +658,35 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
-    # Test with best checkpoint
-    if data_loader_test is not None:
-        print('Loading model with best validation mIoU')
-        checkpoint = torch.load(os.path.join(args.output_dir, 'checkpoint-best.pth'), map_location='cpu')
-        state_dict = {}
-        for k,v in checkpoint['model'].items():
-            state_dict[f'module.{k}'] = v
-        msg = model.load_state_dict(state_dict, strict=False)
-        print(msg)
+    # # Test with best checkpoint
+    # if data_loader_test is not None:
+    #     print('Loading model with best validation mIoU')
+    #     checkpoint = torch.load(os.path.join(args.output_dir, 'checkpoint-best.pth'), map_location='cpu')
+    #     state_dict = {}
+    #     for k,v in checkpoint['model'].items():
+    #         state_dict[f'module.{k}'] = v
+    #     msg = model.load_state_dict(state_dict, strict=False)
+    #     print(msg)
 
-        print('Testing with best checkpoint')
-        test_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_test,
-                              device=device, epoch=checkpoint['epoch'], in_domains=args.in_domains,
-                              num_classes=args.num_classes, log_images=True, dataset_name=args.dataset_name,
-                              mode='test', fp16=args.fp16, return_all_layers=return_all_layers)
-        log_stats = {f'test/{k}': v for k, v in test_stats.items()}
-        if log_writer is not None:
-            log_writer.set_step(args.epochs * num_training_steps_per_epoch)
-            log_writer.update(log_stats)
-        if args.output_dir and utils.is_main_process():
-            with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
-                f.write(json.dumps(log_stats) + "\n")
+    #     print('Testing with best checkpoint')
+    #     seg_test_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_test,
+    #                           device=device, epoch=checkpoint['epoch'], in_domains=args.in_domains,
+    #                           num_classes=args.num_classes, log_images=True, dataset_name=args.dataset_name,
+    #                           mode='test', fp16=args.fp16, return_all_layers=return_all_layers)
+    #     log_stats = {f'test/{k}': v for k, v in seg_test_stats.items()}
+    #     if log_writer is not None:
+    #         log_writer.set_step(args.epochs * num_training_steps_per_epoch)
+    #         log_writer.update(log_stats)
+    #     if args.output_dir and utils.is_main_process():
+    #         with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
+                # f.write(json.dumps(log_stats) + "\n")
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loader: Iterable,
+def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
-                    return_all_layers=False):
+                    return_all_layers=False, standardize_depth=True, log_images=False):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -585,7 +703,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
                     param_group["lr"] = lr_schedule_values[it] * param_group["lr_scale"]
                 if wd_schedule_values is not None and param_group["weight_decay"] > 0:
                     param_group["weight_decay"] = wd_schedule_values[it]
-
+        
+        if 'depth_zbuffer' in x:
+            x['depth'] = x['depth_zbuffer']
+            del x['depth_zbuffer']
+            
         tasks_dict = {
             task: tensor.to(device, non_blocking=True)
             for task, tensor in x.items()
@@ -601,13 +723,55 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
             psemseg  = tasks_dict['pseudo_semseg']
             psemseg[psemseg > COCO_SEMSEG_NUM_CLASSES - 1] = COCO_SEMSEG_NUM_CLASSES
             input_dict['semseg'] = psemseg
+
+        # Robust depth standardization
+        if standardize_depth and 'depth' in input_dict:
+            # Flatten depth and remove bottom and top 10% of non-masked values
+            nan_depth = input_dict['depth'].clone()
+            nan_depth[~tasks_dict['mask_valid']] = np.nan
+            trunc_depth = torch.sort(rearrange(nan_depth, 'b c h w -> b (c h w)'), dim=1)[0]
+            n_valid = (~torch.isnan(trunc_depth)).sum(dim=1)
+            from_idxs, to_idxs = (n_valid * 0.1).long(), (n_valid * 0.9).long()
+            robust_means = torch.stack([
+                trunc_depth[batch_idx, from_idx:to_idx].mean() 
+                for batch_idx, (from_idx, to_idx) in enumerate(zip(from_idxs, to_idxs))
+            ])
+            robust_vars = torch.stack([
+                trunc_depth[batch_idx, from_idx:to_idx].var() 
+                for batch_idx, (from_idx, to_idx) in enumerate(zip(from_idxs, to_idxs))
+            ])
+            input_dict['depth'] = (input_dict['depth'] - robust_means[:,None,None,None]) / torch.sqrt(robust_vars[:,None,None,None] + 1e-6)
+            input_dict['depth'][~tasks_dict['mask_valid']] = 0.0
+        
+        # Mask invalid input values
+        for task in input_dict:
+            if task in ['rgb']:
+                continue
+            channels = input_dict[task].shape[1]
+            input_dict[task][~tasks_dict['mask_valid'].repeat_interleave(repeats=channels, dim=1)] = 0.0
+
         
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
-            loss = criterion(seg_pred, seg_gt)
+            # 세그멘테이션 손실 계산
+            seg_loss = 0
+            if 'semseg' in tasks_dict:
+                seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
+                seg_loss = criterion(seg_pred, seg_gt)
 
+            # 뎁스 손실 계산
+            depth_loss = 0
+            if 'depth' in tasks_dict:
+                depth_losses = {
+                    task: tasks_loss_fn[task](preds[task].float(), tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
+                    for task in preds if task != 'semseg'
+                }
+                depth_loss = sum(depth_losses.values())
+
+            # 총 손실 계산 및 역전파
+            loss = seg_loss + depth_loss
+            
         loss_value = loss.item()
 
         optimizer.zero_grad()
@@ -657,7 +821,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
 
 
 @torch.no_grad()
-def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
+def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
              log_images=False, mode='val', fp16=True, return_all_layers=False):
     # Switch to evaluation mode
     model.eval()
@@ -737,6 +901,105 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+@torch.no_grad()
+def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
+             log_images=False, mode='val', return_all_layers=False, standardize_depth=True):
+    # Switch to evaluation mode
+    model.eval()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    if mode == 'val':
+        header = '(Eval) Epoch: [{}]'.format(epoch)
+    elif mode == 'test':
+        header = '(Test) Epoch: [{}]'.format(epoch)
+    else:
+        raise ValueError(f'Invalid eval mode {mode}')
+    print_freq = 20
+
+    pred_images = None
+    gt_images = None
+
+    for x in metric_logger.log_every(data_loader, print_freq, header):
+        x = x[0]
+
+        if 'depth_zbuffer' in x:
+            x['depth'] = x['depth_zbuffer']
+            del x['depth_zbuffer']
+        
+        tasks_dict = {
+            task: tensor.to(device, non_blocking=True)
+            for task, tensor in x.items()
+        }
+
+        input_dict = {
+            task: tensor
+            for task, tensor in tasks_dict.items()
+            if task in in_domains
+        }
+
+        # Robust depth standardization
+        if standardize_depth and 'depth' in input_dict:
+            # Flatten depth and remove bottom and top 10% of non-masked values
+            nan_depth = input_dict['depth'].clone()
+            nan_depth[~tasks_dict['mask_valid']] = np.nan
+            trunc_depth = torch.sort(rearrange(nan_depth, 'b c h w -> b (c h w)'), dim=1)[0]
+            n_valid = (~torch.isnan(trunc_depth)).sum(dim=1)
+            from_idxs, to_idxs = (n_valid * 0.1).long(), (n_valid * 0.9).long()
+            robust_means = torch.stack([
+                trunc_depth[batch_idx, from_idx:to_idx].mean() 
+                for batch_idx, (from_idx, to_idx) in enumerate(zip(from_idxs, to_idxs))
+            ])
+            robust_vars = torch.stack([
+                trunc_depth[batch_idx, from_idx:to_idx].var() 
+                for batch_idx, (from_idx, to_idx) in enumerate(zip(from_idxs, to_idxs))
+            ])
+            input_dict['depth'] = (input_dict['depth'] - robust_means[:,None,None,None]) / torch.sqrt(robust_vars[:,None,None,None] + 1e-6)
+            input_dict['depth'][~tasks_dict['mask_valid']] = 0.0
+
+        # Mask invalid input values
+        for task in input_dict:
+            if task in ['rgb']:
+                continue
+            channels = input_dict[task].shape[1]
+            input_dict[task][~tasks_dict['mask_valid'].repeat_interleave(repeats=channels, dim=1)] = 0.0
+
+        # Forward + backward
+        with torch.cuda.amp.autocast(enabled=False):
+            preds = model(input_dict, return_all_layers=return_all_layers)
+            task_losses = {
+                task: tasks_loss_fn[task](preds[task], tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
+                for task in preds
+            }
+            loss = sum(task_losses.values())
+
+        loss_value = loss.item()
+        task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
+        metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=tasks_dict['mask_valid'])
+
+        metric_logger.update(**metrics)
+
+        if log_images and pred_images is None and utils.is_main_process():
+            # Just log images of first batch
+            pred_images = {task: v.detach().cpu().float() for task, v in preds.items()}
+            gt_images = {task: v.detach().cpu().float() for task, v in input_dict.items()}
+            gt_images.update({task: v.detach().cpu().float() for task, v in tasks_dict.items() if task not in gt_images})
+
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(**task_loss_values)
+
+    # Do before metrics so that void is not replaced
+    if log_images and utils.is_main_process():
+        prefix = 'val/img' if mode == 'val' else 'test/img'
+        log_taskonomy_wandb(pred_images, gt_images, prefix=prefix, image_count=8)
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+
+    print(f'* Loss {metric_logger.loss.global_avg:.3f}')
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
 
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
 
@@ -778,6 +1041,19 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
 
 if __name__ == '__main__':
     opts = get_args()
+    
+    # Logic from the first block for handling the 'tmp' option and customizing output directory and wandb run name
+    if opts.tmp:
+        opts.output_dir = f'{opts.output_dir}-tmp'
+        opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
+    else:
+        opts.output_dir = f'{opts.output_dir}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+
+    # Create output directory if it doesn't exist
     if opts.output_dir:
         Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Call the main function
     main(opts)
+
