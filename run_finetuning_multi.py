@@ -159,7 +159,7 @@ def get_args():
     parser.add_argument('--batch_size', default=4, type=int, help='Batch size per GPU')
     parser.add_argument('--epochs', default=64, type=int)
     parser.add_argument('--save_ckpt_freq', default=200, type=int)
-
+    parser.add_argument('--tmp', default=False, action='store_true')
     # Task parameters
     parser.add_argument('--in_domains', default='rgb', type=str,
                         help='Input domain names, separated by hyphen')
@@ -204,8 +204,7 @@ def get_args():
                         help='Predictions per patch for convnext adapter')
     parser.add_argument('--decoder_interpolate_mode', type=str, default='bilinear',
                         choices=['bilinear', 'nearest'], help='for convnext adapter')
-    parser.add_argument('--decoder_main_tasks', type=str, default='rgb',
-                        help='for convnext adapter, separate tasks with a hyphen')
+
 
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -592,7 +591,7 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
-
+        log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         train_stats = train_one_epoch(
             model=model, tasks_loss_fn=tasks_loss_fn, criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
