@@ -140,9 +140,6 @@ DOMAIN_CONF = {
                                  dim_class_emb=64, interpolate_class_emb=False,
                                  emb_padding_idx=COCO_SEMSEG_NUM_CLASSES),
     },
-    'pseudo_semseg': {
-        'aug_type': 'mask'
-    },
     'mask_valid': {
         'stride_level': 1,
         'aug_type': 'mask',
@@ -456,7 +453,7 @@ def main(args):
         'depth' : adapters_dict[args.output_adapter](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size,
-            main_tasks=args.decoder_main_tasks)
+            main_tasks=args.decoder_main_tasks.split('-'))
     }
 
     model = create_model(
@@ -763,11 +760,7 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
             # 뎁스 손실 계산
             depth_loss = 0
             if 'depth' in tasks_dict:
-                depth_losses = {
-                    task: tasks_loss_fn[task](preds[task].float(), tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
-                    for task in preds if task != 'semseg'
-                }
-                depth_loss = sum(depth_losses.values())
+                depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
 
             # 총 손실 계산 및 역전파
             loss = seg_loss + depth_loss

@@ -665,7 +665,7 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
 
             preds = model(input_dict, return_all_layers=return_all_layers)
             task_losses = {
-                task: tasks_loss_fn[task](preds[task].float(), tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
+                task: tasks_loss_fn[task](preds[task].float(), tasks_dict[task], mask_valid=None)
                 for task in preds
             }
             loss = sum(task_losses.values())
