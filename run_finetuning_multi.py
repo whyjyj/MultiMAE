@@ -548,7 +548,7 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
 
     print("semseg criterion = %s" % str(criterion))
-    print("dpeth criterion = %s" % str(tasks_loss_fn))
+    print("depth criterion = %s" % tasks_loss_fn)
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']
 
@@ -556,19 +556,14 @@ def main(args):
         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
     if args.eval:
-        seg_val_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_val,
-                             device=device, epoch=-1, in_domains=args.in_domains,
-                             num_classes=args.num_classes, dataset_name=args.dataset_name, mode='val',
-                             fp16=args.fp16, return_all_layers=return_all_layers)
+        eval_stats = evaluate_both(model=model, criterion=criterion, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
+                           device=device, epoch=epoch, in_domains=args.in_domains, num_classes=args.num_classes,
+                           dataset_name=args.dataset_name, mode='val', fp16=args.fp16, return_all_layers=return_all_layers,
+                           standardize_depth=args.standardize_depth)
+
         print(f"Performance of the network on the {len(dataset_val)} validation images")
-        miou, a_acc, acc, loss = seg_val_stats['mean_iou'], seg_val_stats['pixel_accuracy'], seg_val_stats['mean_accuracy'], seg_val_stats['loss']
-        print(f'* mIoU {miou:.3f} aAcc {a_acc:.3f} Acc {acc:.3f} Loss {loss:.3f}')
-        
-        depth_val_stats = evaluate_depth(model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
-                             device=device, epoch=-1, in_domains=args.in_domains, mode='val', log_images=True,
-                             return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
-        print(f"Performance of the network on the {len(dataset_val)} validation images")
-        print(f"Loss {depth_val_stats['loss']:.3f}")
+        print(f"* Seg Loss {eval_stats['seg_loss']:.3f} Depth Loss {eval_stats['depth_loss']:.3f}")
+ 
         exit(0)
 
     if args.test:
@@ -965,8 +960,7 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
             preds = model(input_dict, return_all_layers=return_all_layers)
             task_loss =  tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
                 
-            
-            loss = sum(task_loss.values())
+            loss = sum(task_loss.item())
 
         loss_value = loss.item()
         task_loss_values = {f'{task}_loss': l.item() for task, l in task_loss.items()}
@@ -983,11 +977,6 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
         metric_logger.update(loss=loss_value)
         metric_logger.update(**task_loss_values)
 
-    # Do before metrics so that void is not replaced
-    if log_images and utils.is_main_process():
-        prefix = 'val/img' if mode == 'val' else 'test/img'
-        log_taskonomy_wandb(pred_images, gt_images, prefix=prefix, image_count=8)
-
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
 
@@ -995,6 +984,64 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+@torch.no_grad()
+def evaluate_both(model, criterion, tasks_loss_fn, data_loader, device, epoch, in_domains, num_classes, dataset_name,
+             log_images=False, mode='val', fp16=True, return_all_layers=False, standardize_depth=True):
+    # Switch to evaluation mode
+    model.eval()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    if mode == 'val':
+        header = '(Eval) Epoch: [{}]'.format(epoch)
+    elif mode == 'test':
+        header = '(Test) Epoch: [{}]'.format(epoch)
+    else:
+        raise ValueError(f'Invalid eval mode {mode}')
+    print_freq = 20
+
+    seg_preds = []
+    seg_gts = []
+
+    for (x, _) in metric_logger.log_every(data_loader, print_freq, header):
+        tasks_dict = {
+            task: tensor.to(device, non_blocking=True)
+            for task, tensor in x.items()
+        }
+
+        input_dict = {
+            task: tensor
+            for task, tensor in tasks_dict.items()
+            if task in in_domains
+        }
+
+        # Forward pass
+        with torch.cuda.amp.autocast(enabled=fp16):
+            preds = model(input_dict, return_all_layers=return_all_layers)
+            seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
+            depth_pred, depth_gt = preds['depth'], tasks_dict['depth']
+
+            # Calculate losses
+            seg_loss = criterion(seg_pred, seg_gt)
+            depth_loss = tasks_loss_fn['depth'](depth_pred.float(), depth_gt, mask_valid=None)
+
+        # Update metrics
+        seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+        seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
+        seg_gts.extend(list(seg_gt.cpu().numpy()))
+
+        metric_logger.update(seg_loss=seg_loss.item(), depth_loss=depth_loss.item())
+
+    # Compute metrics
+    scores = compute_metrics_distributed(seg_preds, seg_gts, size=len(data_loader.dataset), num_classes=num_classes,
+                                         device=device, ignore_index=utils.SEG_IGNORE_INDEX)
+
+    for k, v in scores.items():
+        metric_logger.update(**{f"{k}": v})
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
