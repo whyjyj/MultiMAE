@@ -547,8 +547,8 @@ def main(args):
 
     criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
 
-    print("criterion = %s" % str(criterion))
-
+    print("semseg criterion = %s" % str(criterion))
+    print("dpeth criterion = %s" % str(tasks_loss_fn))
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']
 
@@ -894,7 +894,7 @@ def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_c
     metric_logger.synchronize_between_processes()
 
     print(f'* mIoU {metric_logger.mean_iou.global_avg:.3f} aAcc {metric_logger.pixel_accuracy.global_avg:.3f} '
-          f'Acc {metric_logger.mean_accuracy.global_avg:.3f} Loss {metric_logger.loss.global_avg:.3f}')
+          f'Acc {metric_logger.mean_accuracy.global_avg:.3f} Semseg Loss {metric_logger.loss.global_avg:.3f}')
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
@@ -963,15 +963,14 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=False):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            task_losses = {
-                task: tasks_loss_fn[task](preds[task], tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
-                for task in preds
-            }
-            loss = sum(task_losses.values())
+            task_loss =  tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
+                
+            
+            loss = sum(task_loss.values())
 
         loss_value = loss.item()
-        task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
-        metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=tasks_dict['mask_valid'])
+        task_loss_values = {f'{task}_loss': l.item() for task, l in task_loss.items()}
+        metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=None)
 
         metric_logger.update(**metrics)
 
@@ -992,7 +991,7 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
 
-    print(f'* Loss {metric_logger.loss.global_avg:.3f}')
+    print(f'* Depth Loss {metric_logger.loss.global_avg:.3f}')
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
