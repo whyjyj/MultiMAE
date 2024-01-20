@@ -5,7 +5,7 @@ finetune: '/path/to/pretrained_weights' # Change me
 
 # Input tasks
 in_domains: rgb
-use_mask_valid: True # Requires "task" mask_valid to be saved to disk
+use_mask_valid: False # Requires "task" mask_valid to be saved to disk
 
 # Architecture
 model: multivit_base

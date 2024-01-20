@@ -185,7 +185,7 @@ def get_args():
                         help='dataset path for testing')
     parser.add_argument('--max_val_images', default=None, type=int,
                         help='maximum number of validation images. (default: None)')
-    parser.add_argument('--eval_freq', default=1, type=int, help="frequency of evaluation")
+    parser.add_argument('--', default=200, type=int, help="frequency of evaluation")
     parser.add_argument('--seg_reduce_zero_label', action='store_true',
                         help='set label 0 to ignore, reduce all other labels by 1')
     parser.add_argument('--seg_use_void_label', action='store_true', help='label border as void instead of ignore')

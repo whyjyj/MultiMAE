@@ -155,7 +155,7 @@ def get_args():
     parser = argparse.ArgumentParser('MultiMAE Multitask fine-tuning script', add_help=False)
     parser.add_argument('--batch_size', default=4, type=int, help='Batch size per GPU')
     parser.add_argument('--epochs', default=64, type=int)
-    parser.add_argument('--save_ckpt_freq', default=200, type=int)
+    parser.add_argument('--save_ckpt_freq', default=20, type=int)
     parser.add_argument('--tmp', default=False, action='store_true')
     # Task parameters
     parser.add_argument('--in_domains', default='rgb', type=str,
@@ -259,7 +259,7 @@ def get_args():
                         help='dataset path for testing')
     parser.add_argument('--max_val_images', default=None, type=int,
                         help='maximum number of validation images. (default: None)')
-    parser.add_argument('--eval_freq', default=1, type=int, help="frequency of evaluation")
+    parser.add_argument('--eval_freq', default= 200, type=int, help="frequency of evaluation")
     parser.add_argument('--seg_reduce_zero_label', action='store_true',
                         help='set label 0 to ignore, reduce all other labels by 1')
     parser.add_argument('--seg_use_void_label', action='store_true', help='label border as void instead of ignore')
@@ -557,13 +557,12 @@ def main(args):
 
     if args.eval:
         eval_stats = evaluate_both(model=model, criterion=criterion, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
-                           device=device, epoch=epoch, in_domains=args.in_domains, num_classes=args.num_classes,
+                           device=device, epoch=-1, in_domains=args.in_domains, num_classes=args.num_classes,
                            dataset_name=args.dataset_name, mode='val', fp16=args.fp16, return_all_layers=return_all_layers,
                            standardize_depth=args.standardize_depth)
-
+        eval_stats_str = ", ".join([f"{key}: {value:.3f}" for key, value in eval_stats.items()])
         print(f"Performance of the network on the {len(dataset_val)} validation images")
-        print(f"* Seg Loss {eval_stats['seg_loss']:.3f} Depth Loss {eval_stats['depth_loss']:.3f}")
- 
+        print(f"* {eval_stats_str}")
         exit(0)
 
     if args.test:
@@ -599,7 +598,7 @@ def main(args):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch)
 
-        if data_loader_val is not None and (epoch % args.eval_freq == 0 or epoch == args.epochs - 1):
+        if data_loader_val is not None and (epoch == args.epochs - 1):
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
 
             seg_val_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_val,
@@ -959,11 +958,9 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
         with torch.cuda.amp.autocast(enabled=False):
             preds = model(input_dict, return_all_layers=return_all_layers)
             task_loss =  tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
-                
-            loss = sum(task_loss.item())
+            loss = task_loss.item()
 
-        loss_value = loss.item()
-        task_loss_values = {f'{task}_loss': l.item() for task, l in task_loss.items()}
+        loss_value = loss
         metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=None)
 
         metric_logger.update(**metrics)
@@ -975,7 +972,6 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
             gt_images.update({task: v.detach().cpu().float() for task, v in tasks_dict.items() if task not in gt_images})
 
         metric_logger.update(loss=loss_value)
-        metric_logger.update(**task_loss_values)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -986,7 +982,7 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
 
 @torch.no_grad()
 def evaluate_both(model, criterion, tasks_loss_fn, data_loader, device, epoch, in_domains, num_classes, dataset_name,
-             log_images=False, mode='val', fp16=True, return_all_layers=False, standardize_depth=True):
+                  log_images=False, mode='val', fp16=True, return_all_layers=False, standardize_depth=True):
     # Switch to evaluation mode
     model.eval()
 
@@ -1001,6 +997,17 @@ def evaluate_both(model, criterion, tasks_loss_fn, data_loader, device, epoch, i
 
     seg_preds = []
     seg_gts = []
+
+    # Depth metrics 초기화
+    depth_metrics = {
+        'rmse': [],
+        'rel': [],
+        'srel': [],
+        'log10': [],
+        'delta_1': [],
+        'delta_2': [],
+        'delta_3': []
+    }
 
     for (x, _) in metric_logger.log_every(data_loader, print_freq, header):
         tasks_dict = {
@@ -1024,24 +1031,37 @@ def evaluate_both(model, criterion, tasks_loss_fn, data_loader, device, epoch, i
             seg_loss = criterion(seg_pred, seg_gt)
             depth_loss = tasks_loss_fn['depth'](depth_pred.float(), depth_gt, mask_valid=None)
 
-        # Update metrics
+        # 세그먼테이션 결과 업데이트
         seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
 
+        # 깊이 평가 지표 업데이트
+        depth_eval_metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=None)
+        for key in depth_metrics:
+            depth_metrics[key].append(depth_eval_metrics[key].cpu().numpy())
+
         metric_logger.update(seg_loss=seg_loss.item(), depth_loss=depth_loss.item())
 
-    # Compute metrics
-    scores = compute_metrics_distributed(seg_preds, seg_gts, size=len(data_loader.dataset), num_classes=num_classes,
-                                         device=device, ignore_index=utils.SEG_IGNORE_INDEX)
+    # 세그먼테이션 평가 지표 계산
+    seg_scores = compute_metrics_distributed(seg_preds, seg_gts, size=len(data_loader.dataset), num_classes=num_classes,
+                                             device=device, ignore_index=utils.SEG_IGNORE_INDEX)
 
-    for k, v in scores.items():
-        metric_logger.update(**{f"{k}": v})
+    # 깊이 평가 지표 평균 계산
+    for key in depth_metrics:
+        depth_metrics[key] = np.mean(depth_metrics[key])
+
+    for k, v in seg_scores.items():
+        metric_logger.update(**{f"seg_{k}": v})
+
+    for k, v in depth_metrics.items():
+        metric_logger.update(**{f"depth_{k}": v})
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
 
 
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
