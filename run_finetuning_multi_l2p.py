@@ -35,12 +35,13 @@ from einops import rearrange
 
 import utils
 import utils.data_constants as data_constants
-from multimae import multimae
+from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter,PromptPatchedInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
                                       SegmenterMaskTransformerAdapter)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
+from multimae import prompt
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES, NYU_MEAN, NYU_STD
 from utils.datasets_semseg import build_semseg_dataset, simple_transform
 from utils.dataset_regression import build_regression_dataset, nyu_transform
@@ -121,6 +122,7 @@ def masked_nyu_metrics(preds, target, mask_valid=None):
 
 
 DOMAIN_CONF = {
+
     'rgb': {
         'channels': 3,
         'stride_level': 1,
@@ -345,8 +347,8 @@ def get_args():
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
     parser.add_argument('--head_type', default='prompt', choices=['token', 'gap', 'prompt', 'token+prompt'], type=str, help='input type of classification head')
-    parser.add_argument('--freeze', default=['blocks', 'patch_embed', 'cls_token', 'norm', 'pos_embed'], nargs='*', type=list, help='freeze part in backbone model')
- 
+    parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
+
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
     if args_config.config:
@@ -478,21 +480,27 @@ def main(args):
             patch_size=args.patch_size,
             main_tasks=args.decoder_main_tasks.split('-'))
     }
+
     print(f"Creating original model: {args.model}")
+
     original_model = create_model(
         args.model,
-        input_adapters=input_adapters,
+        input_adapters={'rgb': partial(PatchedInputAdapter, num_channels=3)(stride_level=1,
+            patch_size_full=args.patch_size,
+            image_size=args.input_size,
+            learnable_pos_emb=args.learnable_pos_emb)},
         output_adapters=output_adapters,
-        drop_path_rate=args.drop_path_encoder,
-        
-    )
-    print(f"Creating model: {args.model}")
+        drop_path_rate=args.drop_path_encoder)
+
+
+    original_n_parameters =  sum(p.numel() for p in original_model.parameters() if p.requires_grad)
+
+    print(f"Creating model: {args.model}", "for PEFT")
     model = create_model(
         args.model,
         input_adapters=input_adapters,
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
-        drop_block_rate=None,
         prompt_length=args.length,
         embedding_key=args.embedding_key,
         prompt_init=args.prompt_key_init,
@@ -505,7 +513,7 @@ def main(args):
         head_type=args.head_type,
         use_prompt_mask=args.use_prompt_mask,
     )
-    
+
     if args.finetune:
         if args.finetune.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -535,23 +543,28 @@ def main(args):
         # all parameters are frozen for original vit model
         for p in original_model.parameters():
             p.requires_grad = False
-        
-        # freeze args.freeze[blocks, patch_embed, cls_token] parameters
+        # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
         for n, p in model.named_parameters():
-            if n.startswith(tuple(args.freeze)):
+            if n.startswith('encoder'):
                 p.requires_grad = False
-    
+
+        for name, param in model.named_parameters():
+            if 'input_adapters' in name or 'output_adapters' in name:
+                param.requires_grad = True
+
+        #check frozen well 
+        # for n,p in model.named_parameters():
+        #   if p.requires_grad:
+        #     print('Unfrozen :' , n)
+
     original_model.to(device)            
     model.to(device)
 
     model_without_ddp = model
-    original_n_parameters =  sum(p.numel() for p in original_model.parameters() if p.requires_grad)
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    print("Model = %s" % str(model_without_ddp))
-    print('number of params: {} M'.format(n_parameters / 1e6))
+    # print("Model = %s" % str(model_without_ddp))
+    print('number of l2p model params: {} M'.format(n_parameters / 1e6))
     print('number of original params : {} M'.format(original_n_parameters / 1e6))
-    
     print('Parameter Efficiency : {} %'.format((n_parameters / original_n_parameters) * 100))
     
     if args.loss == 'l1':
@@ -642,11 +655,6 @@ def main(args):
             log_writer.set_step(epoch * num_training_steps_per_epoch)
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         
-        
-        train_and_evaluate(model, model_without_ddp, original_model,
-                    criterion, data_loader_train, optimizer, lr_schedule_values,
-                    device,args)
-        
         train_stats = train_one_epoch(
             model=model, tasks_loss_fn=tasks_loss_fn, criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
@@ -655,7 +663,7 @@ def main(args):
             in_domains=args.in_domains, fp16=args.fp16, return_all_layers=return_all_layers,
             log_images=log_images
         )
-
+        
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
@@ -1166,126 +1174,6 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
     ret = dict(pixel_accuracy=pix_acc, mean_accuracy=mean_acc, mean_iou=miou)
     return ret
 
-@torch.no_grad()
-def evaluate_till_now(model: torch.nn.Module, original_model: torch.nn.Module, data_loader, 
-                    device, task_id=-1, class_mask=None, acc_matrix=None, args=None,):
-    stat_matrix = np.zeros((3, args.num_tasks)) # 3 for Acc@1, Acc@5, Loss
-
-    for i in range(task_id+1):
-        test_stats = evaluate(model=model, original_model=original_model, data_loader=data_loader[i]['val'], 
-                            device=device, task_id=i, class_mask=class_mask, args=args)
-
-        stat_matrix[0, i] = test_stats['Acc@1']
-        stat_matrix[1, i] = test_stats['Acc@5']
-        stat_matrix[2, i] = test_stats['Loss']
-
-        acc_matrix[i, task_id] = test_stats['Acc@1']
-    
-    avg_stat = np.divide(np.sum(stat_matrix, axis=1), task_id+1)
-
-    diagonal = np.diag(acc_matrix)
-
-    result_str = "[Average accuracy till task{}]\tAcc@1: {:.4f}\tAcc@5: {:.4f}\tLoss: {:.4f}".format(task_id+1, avg_stat[0], avg_stat[1], avg_stat[2])
-    if task_id > 0:
-        forgetting = np.mean((np.max(acc_matrix, axis=1) -
-                            acc_matrix[:, task_id])[:task_id])
-        backward = np.mean((acc_matrix[:, task_id] - diagonal)[:task_id])
-
-        result_str += "\tForgetting: {:.4f}\tBackward: {:.4f}".format(forgetting, backward)
-    print(result_str)
-
-    return test_stats
-
-def train_and_evaluate(model: torch.nn.Module, model_without_ddp: torch.nn.Module, original_model: torch.nn.Module, 
-                    criterion, data_loader: Iterable, optimizer: torch.optim.Optimizer, lr_scheduler, device: torch.device, 
-                    class_mask=None, args = None,):
-
-    # create matrix to save end-of-task accuracies 
-    acc_matrix = np.zeros((args.num_tasks, args.num_tasks))
-
-    for task_id in range(args.num_tasks):
-       # Transfer previous learned prompt params to the new prompt
-        if args.prompt_pool and args.shared_prompt_pool:
-            if task_id > 0:
-                prev_start = (task_id - 1) * args.top_k
-                prev_end = task_id * args.top_k
-
-                cur_start = prev_end
-                cur_end = (task_id + 1) * args.top_k
-
-                if (prev_end > args.size) or (cur_end > args.size):
-                    pass
-                else:
-                    cur_idx = (slice(cur_start, cur_end))
-                    prev_idx = (slice(prev_start, prev_end))
-
-                    with torch.no_grad():
-                        if args.distributed:
-                            model.module.prompt.prompt.grad.zero_()
-                            model.module.prompt.prompt[cur_idx] = model.module.prompt.prompt[prev_idx]
-                            optimizer.param_groups[0]['params'] = model.module.parameters()
-                        else:
-                            model.prompt.prompt.grad.zero_()
-                            model.prompt.prompt[cur_idx] = model.prompt.prompt[prev_idx]
-                            optimizer.param_groups[0]['params'] = model.parameters()
-                    
-        # Transfer previous learned prompt param keys to the new prompt
-        if args.prompt_pool and args.shared_prompt_key:
-            if task_id > 0:
-                prev_start = (task_id - 1) * args.top_k
-                prev_end = task_id * args.top_k
-
-                cur_start = prev_end
-                cur_end = (task_id + 1) * args.top_k
-
-                with torch.no_grad():
-                    if args.distributed:
-                        model.module.prompt.prompt_key.grad.zero_()
-                        model.module.prompt.prompt_key[cur_idx] = model.module.prompt.prompt_key[prev_idx]
-                        optimizer.param_groups[0]['params'] = model.module.parameters()
-                    else:
-                        model.prompt.prompt_key.grad.zero_()
-                        model.prompt.prompt_key[cur_idx] = model.prompt.prompt_key[prev_idx]
-                        optimizer.param_groups[0]['params'] = model.parameters()
-     
-        # Create new optimizer for each task to clear optimizer status
-        if task_id > 0 and args.reinit_optimizer:
-            optimizer = create_optimizer(args, model)
-        
-        for epoch in range(args.epochs):            
-            train_stats = train_one_epoch(model=model, original_model=original_model, criterion=criterion, 
-                                        data_loader=data_loader[task_id]['train'], optimizer=optimizer, 
-                                        device=device, epoch=epoch, max_norm=args.clip_grad, 
-                                        set_training_mode=True, task_id=task_id, class_mask=class_mask, args=args,)
-            
-            if lr_scheduler:
-                lr_scheduler.step(epoch)
-
-        test_stats = evaluate_till_now(model=model, original_model=original_model, data_loader=data_loader, device=device, 
-                                    task_id=task_id, class_mask=class_mask, acc_matrix=acc_matrix, args=args)
-        if args.output_dir and utils.is_main_process():
-            Path(os.path.join(args.output_dir, 'checkpoint')).mkdir(parents=True, exist_ok=True)
-            
-            checkpoint_path = os.path.join(args.output_dir, 'checkpoint/task{}_checkpoint.pth'.format(task_id+1))
-            state_dict = {
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'epoch': epoch,
-                    'args': args,
-                }
-            if args.sched is not None and args.sched != 'constant':
-                state_dict['lr_scheduler'] = lr_scheduler.state_dict()
-            
-            utils.save_on_master(state_dict, checkpoint_path)
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-            **{f'test_{k}': v for k, v in test_stats.items()},
-            'epoch': epoch,}
-
-        if args.output_dir and utils.is_main_process():
-            with open(os.path.join(args.output_dir, '{}_stats.txt'.format(datetime.datetime.now().strftime('log_%Y_%m_%d_%H_%M'))), 'a') as f:
-                f.write(json.dumps(log_stats) + '\n')
-
 if __name__ == '__main__':
     opts = get_args()
     
@@ -1303,4 +1191,6 @@ if __name__ == '__main__':
 
     # Call the main function
     main(opts)
+
+
 

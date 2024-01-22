@@ -16,7 +16,7 @@
 
 from typing import Dict, List, Optional, Tuple, Union
 
-from prompt import Prompt
+from multimae.prompt import Prompt
 
 import torch
 import torch.nn as nn
@@ -141,7 +141,12 @@ class PromptPatchedInputAdapter(nn.Module):
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
                  learnable_pos_emb: bool = False,
-                 image_size: Union[int, Tuple[int]] = 224):
+                 image_size: Union[int, Tuple[int]] = 224,
+                 prompt_length : int = 10,
+                 prompt_pool : bool = True,
+                 top_k : int = 5,
+                 pool_size : int = 5,
+                 device : str = 'cuda'):
 
         super().__init__()
 
@@ -153,6 +158,7 @@ class PromptPatchedInputAdapter(nn.Module):
         self.learnable_pos_emb = learnable_pos_emb
         self.image_size = pair(image_size)
         self.num_patches = (self.image_size[0] // patch_size_full) * (self.image_size[1] // patch_size_full)
+        self.device = device
 
         # Actual patch height and width, taking into account stride of input
         self.P_H = max(1, self.patch_size_full[0] // stride_level)
@@ -161,7 +167,7 @@ class PromptPatchedInputAdapter(nn.Module):
         if self.dim_tokens is not None:
             self.init(dim_tokens=dim_tokens)
 
-    def init(self, dim_tokens: int = 768 , prompt_length=5, prompt_pool=False, top_k=None, pool_size=None):
+    def init(self, dim_tokens: int = 768 , prompt_length= 10, prompt_pool= True, top_k= 5, pool_size= 10):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.
@@ -169,14 +175,18 @@ class PromptPatchedInputAdapter(nn.Module):
         :param dim_tokens: Dimension of tokens
         """
         self.dim_tokens = dim_tokens
+        self.prompt_pool = prompt_pool
+        self.prompt_length = prompt_length
+        self.top_k = top_k
+        self.pool_size = pool_size
 
         # Task embedding identifying from which task a given token comes from
         # Fixed-size positional embeddings. Can be interpolated to different input sizes
         h_posemb = self.image_size[0] // (self.stride_level * self.P_H)
         w_posemb = self.image_size[1] // (self.stride_level * self.P_W)
         if self.sincos_pos_emb:
-            self.pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens)
-            self.pos_emb = nn.Parameter(self.pos_emb, requires_grad=self.learnable_pos_emb)
+            pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens)
+            self.pos_emb = nn.Parameter(pos_emb, requires_grad=self.learnable_pos_emb)
         else:
             self.pos_emb = nn.Parameter(torch.zeros(1, self.dim_tokens, h_posemb, w_posemb))
             trunc_normal_(self.pos_emb, std=0.02)
@@ -184,7 +194,7 @@ class PromptPatchedInputAdapter(nn.Module):
         if prompt_pool :
             self.prompt = Prompt(length=prompt_length, embed_dim=dim_tokens, prompt_pool=prompt_pool,
                                  top_k=top_k, pool_size=pool_size)
-            
+
         # Image -> tokens projection
         self.proj = nn.Conv2d(
             in_channels=self.num_channels, out_channels=self.dim_tokens,
@@ -217,9 +227,13 @@ class PromptPatchedInputAdapter(nn.Module):
         # Add patches and positional embeddings
         x = x_patch + x_pos_emb
 
-        if self.propmt_pool :
+        if self.prompt_pool :
             x = self.prompt(x)
-            
+            prompted_embedding = x['prompted_embedding']
+            total_prompt_len = x['total_prompt_len']
+        
+        # 프롬프트 토큰을 제외한 텐서 반환
+        x = prompted_embedding[:, total_prompt_len:, :]
         return x
     
 class SemSegInputAdapter(nn.Module):
@@ -288,8 +302,8 @@ class SemSegInputAdapter(nn.Module):
         h_posemb = self.image_size[0] // (self.stride_level * self.P_H)
         w_posemb = self.image_size[1] // (self.stride_level * self.P_W)
         if self.sincos_pos_emb:
-            self.pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens)
-            self.pos_emb = nn.Parameter(self.pos_emb, requires_grad=self.learnable_pos_emb)
+            pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens)
+            self.pos_emb = nn.Parameter(pos_emb, requires_grad=self.learnable_pos_emb)
         else:
             self.pos_emb = nn.Parameter(torch.zeros(1, self.dim_tokens, h_posemb, w_posemb))
             trunc_normal_(self.pos_emb, std=0.02)
@@ -340,5 +354,8 @@ class SemSegInputAdapter(nn.Module):
 
         # Add patches and positional embeddings
         x = x_patch + x_pos_emb
+
+        if self.propmt_pool :
+            x = self.prompt(x)
 
         return x

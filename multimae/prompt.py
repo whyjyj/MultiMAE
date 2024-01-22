@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class Prompt(nn.Module):
     def __init__(self, length=5, embed_dim=768, embedding_key='mean', prompt_init='uniform', prompt_pool=False, 
-                 prompt_key=False, pool_size=None, top_k=None, batchwise_prompt=False, prompt_key_init='uniform',):
+                 prompt_key=False, device='cuda' ,pool_size=None, top_k=None, batchwise_prompt=False, prompt_key_init='uniform',):
         super().__init__()
 
         self.length = length
@@ -15,29 +15,30 @@ class Prompt(nn.Module):
         self.pool_size = pool_size
         self.top_k = top_k
         self.batchwise_prompt = batchwise_prompt
+        self.device = device
 
         if self.prompt_pool:
             prompt_pool_shape = (pool_size, length, embed_dim)
             if prompt_init == 'zero':
-                self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
+                self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape).to(device))
             elif prompt_init == 'uniform':
-                self.prompt = nn.Parameter(torch.randn(prompt_pool_shape))
-                nn.init.uniform_(self.prompt, -1, 1)
+                self.prompt = nn.Parameter(torch.randn(prompt_pool_shape).to(device))
+                nn.init.uniform_(self.prompt)
         
         # if using learnable prompt keys
         if prompt_key:
             key_shape = (pool_size, embed_dim)
             if prompt_key_init == 'zero':
-                self.prompt_key = nn.Parameter(torch.zeros(key_shape))
+                self.prompt_key = nn.Parameter(torch.zeros(key_shape).to(device))
             elif prompt_key_init == 'uniform':
-                self.prompt_key = nn.Parameter(torch.randn(key_shape))
-                nn.init.uniform_(self.prompt_key, -1, 1)
+                self.prompt_key = nn.Parameter(torch.randn(key_shape).to(device))
+                nn.init.uniform_(self.prompt_key)
         else:
             # else use mean of prompt as key
             # only compatible with prompt, not prefix
-            prompt_mean = torch.mean(self.prompt, dim=1)
+            prompt_mean = torch.mean(self.prompt, dim=1).to(device)
             self.prompt_key = prompt_mean
-    
+            
     def l2_normalize(self, x, dim=None, epsilon=1e-12):
         """Normalizes a given vector or matrix."""
         square_sum = torch.sum(x ** 2, dim=dim, keepdim=True)
@@ -64,7 +65,7 @@ class Prompt(nn.Module):
             prompt_norm = self.l2_normalize(self.prompt_key, dim=1) # Pool_size, C
             x_embed_norm = self.l2_normalize(x_embed_mean, dim=1) # B, C
 
-            similarity = torch.matmul(x_embed_norm, prompt_norm.t()) # B, Pool_size
+            similarity = torch.matmul(x_embed_norm.to(self.device), prompt_norm.t().to(self.device)).to(self.device) # B, Pool_size
             
             if prompt_mask is None:
                 _, idx = torch.topk(similarity, k=self.top_k, dim=1) # B, top_k
