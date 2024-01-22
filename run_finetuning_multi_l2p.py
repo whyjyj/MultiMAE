@@ -312,7 +312,7 @@ def get_args():
                         help='log training and validation metrics to wandb')
     parser.add_argument('--wandb_entity', default='URP', type=str,
                         help='user or team name of wandb')
-    parser.add_argument('--wandb_run_name', default=None, type=str,
+    parser.add_argument('--wandb_run_name', default='nyu l2p', type=str,
                         help='run name on wandb')
     parser.add_argument('--log_images_wandb', action='store_true')
     parser.add_argument('--log_images_freq', default=5, type=int,
@@ -656,7 +656,7 @@ def main(args):
     min_val_loss = np.inf
     for epoch in range(args.start_epoch, args.epochs):
         if log_writer is not None:
-            log_writer.set_step(epoch * num_training_steps_per_epoch)
+            log_writer.set_step(epoch)
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         
         train_stats = train_one_epoch(
@@ -873,13 +873,15 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
         if log_writer is not None:
             log_writer.update(
                 {
-                    'loss': loss_value,
+                    'total_loss': loss_value,
                     'lr': max_lr,
                     'weight_decay': weight_decay_value,
                     'grad_norm': grad_norm,
+                    'seg_loss': seg_loss.item(),
+                    'depth_loss': depth_loss.item()
                 }
             )
-            log_writer.set_step()
+            log_writer.set_step(epoch)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
