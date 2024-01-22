@@ -449,15 +449,15 @@ def main(args):
         args.in_domains.remove('pseudo_semseg')
         args.in_domains.append('semseg')
 
-    input_adapters = {
-        domain: DOMAIN_CONF[domain]['input_adapter'](
-            stride_level=DOMAIN_CONF[domain]['stride_level'],
-            patch_size_full=args.patch_size,
-            image_size=args.input_size,
-            learnable_pos_emb=args.learnable_pos_emb,
-        )
-        for domain in args.in_domains
-    }
+    # input_adapters = {
+    #     domain: DOMAIN_CONF[domain]['input_adapter'](
+    #         stride_level=DOMAIN_CONF[domain]['stride_level'],
+    #         patch_size_full=args.patch_size,
+    #         image_size=args.input_size,
+    #         learnable_pos_emb=args.learnable_pos_emb,
+    #     )
+    #     for domain in args.in_domains
+    # }
 
     # DPT settings are fixed for ViT-B. Modify them if using a different backbone.
     if args.model != 'multivit_base' and args.output_adapter == 'dpt':
@@ -498,16 +498,20 @@ def main(args):
     print(f"Creating model: {args.model}", "for PEFT")
     model = create_model(
         args.model,
-        input_adapters=input_adapters,
+        input_adapters= {'rgb': partial(PromptPatchedInputAdapter, num_channels=3)(
+            stride_level=1,
+            patch_size_full=args.patch_size,
+            image_size=args.input_size,
+            learnable_pos_emb=args.learnable_pos_emb,
+            prompt_length = args.length , 
+            top_k = args.top_k ,
+            pool_size = args.size)},
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
-        prompt_length=args.length,
         embedding_key=args.embedding_key,
         prompt_init=args.prompt_key_init,
         prompt_pool=args.prompt_pool,
         prompt_key=args.prompt_key,
-        pool_size=args.size,
-        top_k=args.top_k,
         batchwise_prompt=args.batchwise_prompt,
         prompt_key_init=args.prompt_key_init,
         head_type=args.head_type,
@@ -1191,6 +1195,10 @@ if __name__ == '__main__':
 
     # Call the main function
     main(opts)
+
+
+
+
 
 
 

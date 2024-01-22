@@ -137,16 +137,17 @@ class PromptPatchedInputAdapter(nn.Module):
     def __init__(self,
                  num_channels: int,
                  stride_level: int,
+                 prompt_length : int,
+                 top_k : int ,
+                 pool_size : int,
                  patch_size_full: Union[int, Tuple[int,int]],
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
                  learnable_pos_emb: bool = False,
                  image_size: Union[int, Tuple[int]] = 224,
-                 prompt_length : int = 10,
                  prompt_pool : bool = True,
-                 top_k : int = 5,
-                 pool_size : int = 5,
-                 device : str = 'cuda'):
+                 device : str = 'cuda',
+                 ):
 
         super().__init__()
 
@@ -159,6 +160,10 @@ class PromptPatchedInputAdapter(nn.Module):
         self.image_size = pair(image_size)
         self.num_patches = (self.image_size[0] // patch_size_full) * (self.image_size[1] // patch_size_full)
         self.device = device
+        self.prompt_pool = prompt_pool
+        self.prompt_length = prompt_length
+        self.top_k = top_k
+        self.pool_size = pool_size
 
         # Actual patch height and width, taking into account stride of input
         self.P_H = max(1, self.patch_size_full[0] // stride_level)
@@ -167,7 +172,7 @@ class PromptPatchedInputAdapter(nn.Module):
         if self.dim_tokens is not None:
             self.init(dim_tokens=dim_tokens)
 
-    def init(self, dim_tokens: int = 768 , prompt_length= 10, prompt_pool= True, top_k= 5, pool_size= 10):
+    def init(self, dim_tokens: int = 768 , prompt_length :int = 5 , prompt_pool : bool = True, top_k : int = 5, pool_size : int= 10):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.
@@ -175,11 +180,7 @@ class PromptPatchedInputAdapter(nn.Module):
         :param dim_tokens: Dimension of tokens
         """
         self.dim_tokens = dim_tokens
-        self.prompt_pool = prompt_pool
-        self.prompt_length = prompt_length
-        self.top_k = top_k
-        self.pool_size = pool_size
-
+        
         # Task embedding identifying from which task a given token comes from
         # Fixed-size positional embeddings. Can be interpolated to different input sizes
         h_posemb = self.image_size[0] // (self.stride_level * self.P_H)
@@ -192,8 +193,8 @@ class PromptPatchedInputAdapter(nn.Module):
             trunc_normal_(self.pos_emb, std=0.02)
         #prompt 
         if prompt_pool :
-            self.prompt = Prompt(length=prompt_length, embed_dim=dim_tokens, prompt_pool=prompt_pool,
-                                 top_k=top_k, pool_size=pool_size)
+            self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
+                                 top_k=self.top_k, pool_size=self.pool_size)
 
         # Image -> tokens projection
         self.proj = nn.Conv2d(
@@ -359,3 +360,4 @@ class SemSegInputAdapter(nn.Module):
             x = self.prompt(x)
 
         return x
+
