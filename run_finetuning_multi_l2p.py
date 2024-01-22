@@ -308,7 +308,7 @@ def get_args():
     # Wandb logging
     parser.add_argument('--log_wandb', default=True, action='store_true',
                         help='log training and validation metrics to wandb')
-    parser.add_argument('--wandb_project', default='URP_NYUv2', type=str,
+    parser.add_argument('--wandb_project', default='URP_NYUv2_l2p', type=str,
                         help='log training and validation metrics to wandb')
     parser.add_argument('--wandb_entity', default='URP', type=str,
                         help='user or team name of wandb')
@@ -907,10 +907,12 @@ def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_c
 
     rgb_gts = None
     seg_preds_with_void = None
+
     if log_images:
         rgb_gts = []
         seg_preds_with_void = []
         depth_gts = []
+
 
     for (x, _) in metric_logger.log_every(data_loader, print_freq, header):
         tasks_dict = {
@@ -1048,6 +1050,11 @@ def evaluate_depth(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
             gt_images.update({task: v.detach().cpu().float() for task, v in tasks_dict.items() if task not in gt_images})
 
         metric_logger.update(loss=loss_value)
+        
+    # Do before metrics so that void is not replaced
+    if log_images and utils.is_main_process():
+        prefix = 'val/img' if mode == 'val' else 'test/img'
+        log_taskonomy_wandb(pred_images, gt_images, prefix=prefix, image_count=8)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -1186,8 +1193,8 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.output_dir = f'{opts.output_dir}-mode=l2p-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-mode=l2p-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:

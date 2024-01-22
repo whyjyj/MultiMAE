@@ -272,7 +272,7 @@ def get_args():
     parser.set_defaults(find_unused_params=True)
 
     # Wandb logging
-    parser.add_argument('--log_wandb', default=False, action='store_true',
+    parser.add_argument('--log_wandb', default=True, action='store_true',
                         help='log training and validation metrics to wandb')
     parser.add_argument('--no_log_wandb', dest='log_wandb', default=False, action='store_false',
                         help='log training and validation metrics to wandb')
