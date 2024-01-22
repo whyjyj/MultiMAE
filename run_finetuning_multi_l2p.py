@@ -325,6 +325,7 @@ def get_args():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     # Prompt Parameters
+    
     parser.add_argument('--prompt_pool', default=True, type=bool,)
     parser.add_argument('--size', default=10, type=int,)
     parser.add_argument('--length', default=5,type=int, )
@@ -544,11 +545,15 @@ def main(args):
     model.to(device)
 
     model_without_ddp = model
+    original_n_parameters =  sum(p.numel() for p in original_model.parameters() if p.requires_grad)
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print("Model = %s" % str(model_without_ddp))
     print('number of params: {} M'.format(n_parameters / 1e6))
-
+    print('number of original params : {} M'.format(original_n_parameters / 1e6))
+    
+    print('Parameter Efficiency : {} %'.format((n_parameters / original_n_parameters) * 100))
+    
     if args.loss == 'l1':
         tasks_loss_fn = {
             'depth': masked_l1_loss
@@ -1155,6 +1160,125 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
     ret = dict(pixel_accuracy=pix_acc, mean_accuracy=mean_acc, mean_iou=miou)
     return ret
 
+@torch.no_grad()
+def evaluate_till_now(model: torch.nn.Module, original_model: torch.nn.Module, data_loader, 
+                    device, task_id=-1, class_mask=None, acc_matrix=None, args=None,):
+    stat_matrix = np.zeros((3, args.num_tasks)) # 3 for Acc@1, Acc@5, Loss
+
+    for i in range(task_id+1):
+        test_stats = evaluate(model=model, original_model=original_model, data_loader=data_loader[i]['val'], 
+                            device=device, task_id=i, class_mask=class_mask, args=args)
+
+        stat_matrix[0, i] = test_stats['Acc@1']
+        stat_matrix[1, i] = test_stats['Acc@5']
+        stat_matrix[2, i] = test_stats['Loss']
+
+        acc_matrix[i, task_id] = test_stats['Acc@1']
+    
+    avg_stat = np.divide(np.sum(stat_matrix, axis=1), task_id+1)
+
+    diagonal = np.diag(acc_matrix)
+
+    result_str = "[Average accuracy till task{}]\tAcc@1: {:.4f}\tAcc@5: {:.4f}\tLoss: {:.4f}".format(task_id+1, avg_stat[0], avg_stat[1], avg_stat[2])
+    if task_id > 0:
+        forgetting = np.mean((np.max(acc_matrix, axis=1) -
+                            acc_matrix[:, task_id])[:task_id])
+        backward = np.mean((acc_matrix[:, task_id] - diagonal)[:task_id])
+
+        result_str += "\tForgetting: {:.4f}\tBackward: {:.4f}".format(forgetting, backward)
+    print(result_str)
+
+    return test_stats
+
+def train_and_evaluate(model: torch.nn.Module, model_without_ddp: torch.nn.Module, original_model: torch.nn.Module, 
+                    criterion, data_loader: Iterable, optimizer: torch.optim.Optimizer, lr_scheduler, device: torch.device, 
+                    class_mask=None, args = None,):
+
+    # create matrix to save end-of-task accuracies 
+    acc_matrix = np.zeros((args.num_tasks, args.num_tasks))
+
+    for task_id in range(args.num_tasks):
+       # Transfer previous learned prompt params to the new prompt
+        if args.prompt_pool and args.shared_prompt_pool:
+            if task_id > 0:
+                prev_start = (task_id - 1) * args.top_k
+                prev_end = task_id * args.top_k
+
+                cur_start = prev_end
+                cur_end = (task_id + 1) * args.top_k
+
+                if (prev_end > args.size) or (cur_end > args.size):
+                    pass
+                else:
+                    cur_idx = (slice(cur_start, cur_end))
+                    prev_idx = (slice(prev_start, prev_end))
+
+                    with torch.no_grad():
+                        if args.distributed:
+                            model.module.prompt.prompt.grad.zero_()
+                            model.module.prompt.prompt[cur_idx] = model.module.prompt.prompt[prev_idx]
+                            optimizer.param_groups[0]['params'] = model.module.parameters()
+                        else:
+                            model.prompt.prompt.grad.zero_()
+                            model.prompt.prompt[cur_idx] = model.prompt.prompt[prev_idx]
+                            optimizer.param_groups[0]['params'] = model.parameters()
+                    
+        # Transfer previous learned prompt param keys to the new prompt
+        if args.prompt_pool and args.shared_prompt_key:
+            if task_id > 0:
+                prev_start = (task_id - 1) * args.top_k
+                prev_end = task_id * args.top_k
+
+                cur_start = prev_end
+                cur_end = (task_id + 1) * args.top_k
+
+                with torch.no_grad():
+                    if args.distributed:
+                        model.module.prompt.prompt_key.grad.zero_()
+                        model.module.prompt.prompt_key[cur_idx] = model.module.prompt.prompt_key[prev_idx]
+                        optimizer.param_groups[0]['params'] = model.module.parameters()
+                    else:
+                        model.prompt.prompt_key.grad.zero_()
+                        model.prompt.prompt_key[cur_idx] = model.prompt.prompt_key[prev_idx]
+                        optimizer.param_groups[0]['params'] = model.parameters()
+     
+        # Create new optimizer for each task to clear optimizer status
+        if task_id > 0 and args.reinit_optimizer:
+            optimizer = create_optimizer(args, model)
+        
+        for epoch in range(args.epochs):            
+            train_stats = train_one_epoch(model=model, original_model=original_model, criterion=criterion, 
+                                        data_loader=data_loader[task_id]['train'], optimizer=optimizer, 
+                                        device=device, epoch=epoch, max_norm=args.clip_grad, 
+                                        set_training_mode=True, task_id=task_id, class_mask=class_mask, args=args,)
+            
+            if lr_scheduler:
+                lr_scheduler.step(epoch)
+
+        test_stats = evaluate_till_now(model=model, original_model=original_model, data_loader=data_loader, device=device, 
+                                    task_id=task_id, class_mask=class_mask, acc_matrix=acc_matrix, args=args)
+        if args.output_dir and utils.is_main_process():
+            Path(os.path.join(args.output_dir, 'checkpoint')).mkdir(parents=True, exist_ok=True)
+            
+            checkpoint_path = os.path.join(args.output_dir, 'checkpoint/task{}_checkpoint.pth'.format(task_id+1))
+            state_dict = {
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'args': args,
+                }
+            if args.sched is not None and args.sched != 'constant':
+                state_dict['lr_scheduler'] = lr_scheduler.state_dict()
+            
+            utils.save_on_master(state_dict, checkpoint_path)
+
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+            **{f'test_{k}': v for k, v in test_stats.items()},
+            'epoch': epoch,}
+
+        if args.output_dir and utils.is_main_process():
+            with open(os.path.join(args.output_dir, '{}_stats.txt'.format(datetime.datetime.now().strftime('log_%Y_%m_%d_%H_%M'))), 'a') as f:
+                f.write(json.dumps(log_stats) + '\n')
 
 if __name__ == '__main__':
     opts = get_args()
