@@ -641,6 +641,12 @@ def main(args):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
+        
+        
+        train_and_evaluate(model, model_without_ddp, original_model,
+                    criterion, data_loader_train, optimizer, lr_schedule_values,
+                    device,args)
+        
         train_stats = train_one_epoch(
             model=model, tasks_loss_fn=tasks_loss_fn, criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
