@@ -660,7 +660,7 @@ def main(args):
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                    loss_scaler=loss_scaler, epoch=epoch, extra_info="multi")
+                    loss_scaler=loss_scaler, epoch=epoch, extra_info="l2p")
 
         if data_loader_val is not None and (epoch == args.epochs - 1):
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
