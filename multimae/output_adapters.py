@@ -495,6 +495,7 @@ class ConvNeXtAdapter(nn.Module):
     def __init__(
             self,
             num_classes,
+            prompt_deep : bool , 
             embed_dim: int = 6144,
             preds_per_patch: int = 16,
             main_tasks: Iterable[str] = ('rgb',),
@@ -504,6 +505,7 @@ class ConvNeXtAdapter(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.prompt_deep = prompt_deep
         self.main_tasks = main_tasks
         self.patch_size = patch_size
         self.embed_dim = embed_dim
@@ -566,7 +568,11 @@ class ConvNeXtAdapter(nn.Module):
                       pw=int(self.preds_per_patch ** 0.5))
         x = self.blocks(x)
         x = self.final_layer(x)
-
+        
+        if self.prompt_deep :
+            prompted_embedding = x['prompted_embedding']
+            total_prompt_len = x['total_prompt_len']
+            x = prompted_embedding[:, total_prompt_len:, :]
         # Interpolate to semseg res
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode)
 

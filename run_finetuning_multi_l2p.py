@@ -343,8 +343,10 @@ def get_args():
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
+    
+    # when using prompt you should activate shallow or deep
     parser.add_argument('--prompt_shallow' , defalt = False , type = bool)
-    parser.add_argument('--prompt_deep' , defalt = True , type = bool)
+    parser.add_argument('--prompt_deep' , defalt = False , type = bool)
     
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
@@ -475,12 +477,13 @@ def main(args):
     output_adapters = {
         'semseg': adapters_dict[args.output_adapter](
             num_classes=args.num_classes_with_void,
-            embed_dim=args.decoder_dim, patch_size=args.patch_size,
+            embed_dim=args.decoder_dim, patch_size=args.patch_size, prompt_deep = args.prompt_deep
         ),
         'depth' : adapters_dict[args.output_adapter](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size,
-            main_tasks=args.decoder_main_tasks.split('-'))
+            main_tasks=args.decoder_main_tasks.split('-'), prompt_deep = args.prompt_deep
+            )
     }
 
     print(f"Creating original model: {args.model}")
