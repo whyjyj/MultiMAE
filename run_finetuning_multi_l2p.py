@@ -343,7 +343,9 @@ def get_args():
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
-
+    parser.add_argument('--prompt_shallow' , defalt = False , type = bool)
+    parser.add_argument('--prompt_deep' , defalt = True , type = bool)
+    
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
     parser.add_argument('--head_type', default='prompt', choices=['token', 'gap', 'prompt', 'token+prompt'], type=str, help='input type of classification head')
@@ -505,7 +507,9 @@ def main(args):
             learnable_pos_emb=args.learnable_pos_emb,
             prompt_length = args.length , 
             top_k = args.top_k ,
-            pool_size = args.size)},
+            pool_size = args.size,
+            prompt_shallow = args.prompt_shallow,
+            prompt_deep = args.prompt_deep)},
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
         embedding_key=args.embedding_key,
@@ -516,6 +520,7 @@ def main(args):
         prompt_key_init=args.prompt_key_init,
         head_type=args.head_type,
         use_prompt_mask=args.use_prompt_mask,
+        
     )
 
     if args.finetune:

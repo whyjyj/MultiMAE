@@ -140,6 +140,8 @@ class PromptPatchedInputAdapter(nn.Module):
                  prompt_length : int,
                  top_k : int ,
                  pool_size : int,
+                 prompt_shallow : bool,
+                 prompt_deep : bool , 
                  patch_size_full: Union[int, Tuple[int,int]],
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
@@ -164,7 +166,9 @@ class PromptPatchedInputAdapter(nn.Module):
         self.prompt_length = prompt_length
         self.top_k = top_k
         self.pool_size = pool_size
-
+        self.prompt_shallow = prompt_shallow 
+        self.prompt_deep = prompt_deep
+        
         # Actual patch height and width, taking into account stride of input
         self.P_H = max(1, self.patch_size_full[0] // stride_level)
         self.P_W = max(1, self.patch_size_full[1] // stride_level)
@@ -172,7 +176,7 @@ class PromptPatchedInputAdapter(nn.Module):
         if self.dim_tokens is not None:
             self.init(dim_tokens=dim_tokens)
 
-    def init(self, dim_tokens: int = 768 , prompt_length :int = 5 , prompt_pool : bool = True, top_k : int = 5, pool_size : int= 10):
+    def init(self, prompt_shallow : bool , prompt_deep : bool, dim_tokens: int = 768 , prompt_length :int = 5 , prompt_pool : bool = True, top_k : int = 5, pool_size : int= 10):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.
@@ -232,10 +236,15 @@ class PromptPatchedInputAdapter(nn.Module):
             x = self.prompt(x)
             prompted_embedding = x['prompted_embedding']
             total_prompt_len = x['total_prompt_len']
-        
-        # 프롬프트 토큰을 제외한 텐서 반환
-        x = prompted_embedding[:, total_prompt_len:, :]
-        return x
+            # 프롬프트 토큰을 제외한 텐서 반환
+            if self.prompt_shallow :
+                x = prompted_embedding[:, total_prompt_len:, :]
+                return x
+            elif self.prompt_deep :
+                return x  
+            # shallow 와 deep 중 하나는 선택해야함.
+            else : 
+                raise Exception("One of the prompt shallow and prompt deep must be activated.")
     
 class SemSegInputAdapter(nn.Module):
     """
