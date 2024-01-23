@@ -61,6 +61,8 @@ class MultiMAE(nn.Module):
     def __init__(self,
                  input_adapters: Dict[str, nn.Module],
                  output_adapters: Optional[Dict[str, nn.Module]],
+                 prompt_shallow : bool , 
+                 prompt_deep : bool,
                  num_global_tokens: int = 1,
                  dim_tokens: int = 768,
                  depth: int = 12,
@@ -73,17 +75,22 @@ class MultiMAE(nn.Module):
                  norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6)):
         super().__init__()
 
+        self.prompt_shallow = prompt_shallow
+        self.prompt_deep = prompt_deep
+
         # Initialize input and output adapters
         for adapter in input_adapters.values():
-            adapter.init(dim_tokens=dim_tokens)
+            adapter.init(dim_tokens=dim_tokens,
+            prompt_shallow = prompt_shallow,
+            prompt_deep = prompt_deep)
         self.input_adapters = nn.ModuleDict(input_adapters)
         if output_adapters is not None:
             for adapter in output_adapters.values():
-                adapter.init(dim_tokens_enc=dim_tokens)
+                adapter.init(dim_tokens_enc=dim_tokens,
+                prompt_deep = prompt_deep)
             self.output_adapters = nn.ModuleDict(output_adapters)
         else:
             self.output_adapters = None
-
         # Additional learnable tokens that can be used by encoder to process/store global information
         self.num_global_tokens = num_global_tokens
         self.global_tokens = nn.Parameter(torch.zeros(1, num_global_tokens, dim_tokens))
@@ -510,10 +517,12 @@ class MultiViT(MultiMAE):
 def multivit_base(
         input_adapters: Dict[str, nn.Module],
         output_adapters: Optional[Dict[str, nn.Module]],
+        prompt_shallow, prompt_deep,
         **kwargs):
     model = MultiViT(
         input_adapters=input_adapters,
         output_adapters=output_adapters,
+        prompt_shallow=prompt_shallow, prompt_deep=prompt_deep,
         dim_tokens=768,
         depth=12,
         num_heads=12,
@@ -523,6 +532,7 @@ def multivit_base(
         **kwargs
     )
     return model
+
 
 @register_model
 def multivit_large(

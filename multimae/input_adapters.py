@@ -44,12 +44,16 @@ class PatchedInputAdapter(nn.Module):
                  num_channels: int,
                  stride_level: int,
                  patch_size_full: Union[int, Tuple[int,int]],
+                 prompt_shallow : bool = False,
+                 prompt_deep : bool = False,
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
                  learnable_pos_emb: bool = False,
                  image_size: Union[int, Tuple[int]] = 224):
 
         super().__init__()
+        self.prompt_shallow = prompt_shallow
+        self.prompt_deep = prompt_deep
         self.num_channels = num_channels
         self.stride_level = stride_level
         self.patch_size_full = pair(patch_size_full)
@@ -66,7 +70,8 @@ class PatchedInputAdapter(nn.Module):
         if self.dim_tokens is not None:
             self.init(dim_tokens=dim_tokens)
 
-    def init(self, dim_tokens: int = 768):
+    def init(self, dim_tokens: int = 768, prompt_shallow : bool = False,
+            prompt_deep : bool = False):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.
@@ -140,9 +145,9 @@ class PromptPatchedInputAdapter(nn.Module):
                  prompt_length : int,
                  top_k : int ,
                  pool_size : int,
-                 prompt_shallow : bool,
-                 prompt_deep : bool , 
                  patch_size_full: Union[int, Tuple[int,int]],
+                 prompt_shallow : bool = False,
+                 prompt_deep : bool = False , 
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
                  learnable_pos_emb: bool = False,
@@ -174,9 +179,11 @@ class PromptPatchedInputAdapter(nn.Module):
         self.P_W = max(1, self.patch_size_full[1] // stride_level)
 
         if self.dim_tokens is not None:
-            self.init(dim_tokens=dim_tokens)
+            self.init(prompt_shallow=self.prompt_shallow,
+            prompt_deep=self.prompt_deep,
+            dim_tokens=self.dim_tokens)
 
-    def init(self, prompt_shallow : bool , prompt_deep : bool, dim_tokens: int = 768 , prompt_length :int = 5 , prompt_pool : bool = True, top_k : int = 5, pool_size : int= 10):
+    def init(self, prompt_shallow : bool = False , prompt_deep : bool = False , dim_tokens: int = 768 , prompt_length :int = 5 , prompt_pool : bool = True, top_k : int = 5, pool_size : int= 10):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.
@@ -184,7 +191,8 @@ class PromptPatchedInputAdapter(nn.Module):
         :param dim_tokens: Dimension of tokens
         """
         self.dim_tokens = dim_tokens
-        
+        self.prompt_pool = prompt_pool
+
         # Task embedding identifying from which task a given token comes from
         # Fixed-size positional embeddings. Can be interpolated to different input sizes
         h_posemb = self.image_size[0] // (self.stride_level * self.P_H)
@@ -211,6 +219,7 @@ class PromptPatchedInputAdapter(nn.Module):
         return {'pos_emb'}
 
     def forward(self, x):
+      
         """
         Forward pass through input adapter, transforming image to sequence of tokens.
         Adds task and positional encodings.
@@ -237,11 +246,11 @@ class PromptPatchedInputAdapter(nn.Module):
             prompted_embedding = x['prompted_embedding']
             total_prompt_len = x['total_prompt_len']
             # 프롬프트 토큰을 제외한 텐서 반환
-            if self.prompt_shallow :
+            if self.prompt_shallow == True and self.prompt_deep == False:
                 x = prompted_embedding[:, total_prompt_len:, :]
                 return x
-            elif self.prompt_deep :
-                return x  
+            elif self.prompt_deep == True and self.prompt_shallow == False :
+                return x['prompted_embedding']  
             # shallow 와 deep 중 하나는 선택해야함.
             else : 
                 raise Exception("One of the prompt shallow and prompt deep must be activated.")

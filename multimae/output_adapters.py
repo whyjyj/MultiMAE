@@ -521,7 +521,7 @@ class ConvNeXtAdapter(nn.Module):
         self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
         self.apply(self._init_weights)
 
-    def init(self, dim_tokens_enc: int = 768):
+    def init(self,prompt_deep :bool, dim_tokens_enc: int = 768 ):
         """
         Initialize parts of decoder that are dependent on dimension of encoder tokens.
         Should be called when setting up MultiMAE.
@@ -560,6 +560,14 @@ class ConvNeXtAdapter(nn.Module):
 
         x = self.adapt_tokens(encoder_tokens, input_info)
 
+      
+        
+        if self.prompt_deep :
+            total_tokens = x.shape[1]
+            desired_tokens = 1600
+            tokens_to_use = total_tokens - (total_tokens - desired_tokens)
+            x = x[:, :tokens_to_use, :]
+
         x = self.proj_dec(x)
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
@@ -569,10 +577,6 @@ class ConvNeXtAdapter(nn.Module):
         x = self.blocks(x)
         x = self.final_layer(x)
         
-        if self.prompt_deep :
-            prompted_embedding = x['prompted_embedding']
-            total_prompt_len = x['total_prompt_len']
-            x = prompted_embedding[:, total_prompt_len:, :]
         # Interpolate to semseg res
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode)
 

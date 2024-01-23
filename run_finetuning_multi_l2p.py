@@ -345,8 +345,8 @@ def get_args():
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
     
     # when using prompt you should activate shallow or deep
-    parser.add_argument('--prompt_shallow' , defalt = False , type = bool)
-    parser.add_argument('--prompt_deep' , defalt = False , type = bool)
+    parser.add_argument('--prompt_shallow' ,action='store_true')
+    parser.add_argument('--prompt_deep' ,action='store_true')
     
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
@@ -490,29 +490,40 @@ def main(args):
 
     original_model = create_model(
         args.model,
-        input_adapters={'rgb': partial(PatchedInputAdapter, num_channels=3)(stride_level=1,
-            patch_size_full=args.patch_size,
-            image_size=args.input_size,
-            learnable_pos_emb=args.learnable_pos_emb)},
+        input_adapters ={'rgb': PatchedInputAdapter(num_channels=3,
+        stride_level=1,
+        patch_size_full=args.patch_size,
+        image_size=args.input_size,
+        learnable_pos_emb=args.learnable_pos_emb,
+        prompt_shallow=False,
+        prompt_deep=False)},
         output_adapters=output_adapters,
-        drop_path_rate=args.drop_path_encoder)
+        drop_path_rate=args.drop_path_encoder,
+        prompt_shallow = False,
+        prompt_deep = False )
 
 
     original_n_parameters =  sum(p.numel() for p in original_model.parameters() if p.requires_grad)
 
     print(f"Creating model: {args.model}", "for PEFT")
+    
+    if args.prompt_deep and not args.prompt_shallow :
+      print("Prompt deep mode")
+    if not args.prompt_deep and args.prompt_shallow :
+      print("Prompt shallow mode")
+
     model = create_model(
         args.model,
-        input_adapters= {'rgb': partial(PromptPatchedInputAdapter, num_channels=3)(
-            stride_level=1,
-            patch_size_full=args.patch_size,
-            image_size=args.input_size,
-            learnable_pos_emb=args.learnable_pos_emb,
-            prompt_length = args.length , 
-            top_k = args.top_k ,
-            pool_size = args.size,
-            prompt_shallow = args.prompt_shallow,
-            prompt_deep = args.prompt_deep)},
+        input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
+        stride_level=1,
+        patch_size_full=args.patch_size,
+        image_size=args.input_size,
+        learnable_pos_emb=args.learnable_pos_emb,
+        prompt_length=args.length,
+        top_k=args.top_k,
+        pool_size=args.size,
+        prompt_shallow=args.prompt_shallow,
+        prompt_deep=args.prompt_deep)},
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
         embedding_key=args.embedding_key,
@@ -523,7 +534,8 @@ def main(args):
         prompt_key_init=args.prompt_key_init,
         head_type=args.head_type,
         use_prompt_mask=args.use_prompt_mask,
-        
+        prompt_shallow = args.prompt_shallow,
+        prompt_deep = args.prompt_deep      
     )
 
     if args.finetune:
@@ -573,11 +585,15 @@ def main(args):
     model.to(device)
 
     model_without_ddp = model
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    prompt_params = sum(p.numel() for p in model.input_adapters['rgb'].prompt.parameters() if p.requires_grad)
+    print("Number of parameters in prompt: {} M".format(prompt_params/1e6))
     # print("Model = %s" % str(model_without_ddp))
     print('number of l2p model params: {} M'.format(n_parameters / 1e6))
     print('number of original params : {} M'.format(original_n_parameters / 1e6))
-    print('Parameter Efficiency : {} %'.format((n_parameters / original_n_parameters) * 100))
+
+    print('Parameter Efficiency : {} %'.format(((n_parameters) / original_n_parameters) * 100))
     
     if args.loss == 'l1':
         tasks_loss_fn = {
@@ -1203,8 +1219,8 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-mode=l2p-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-mode=l2p-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.output_dir = f'{opts.output_dir}-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:
@@ -1212,6 +1228,14 @@ if __name__ == '__main__':
 
     # Call the main function
     main(opts)
+
+
+
+
+
+
+
+
 
 
 

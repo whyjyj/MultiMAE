@@ -28,6 +28,8 @@ def safe_model_name(model_name, remove_source=True):
 
 def create_model(
         model_name,
+        prompt_shallow,
+        prompt_deep,
         pretrained=False,
         checkpoint_path='',
         scriptable=None,
@@ -58,6 +60,8 @@ def create_model(
         kwargs.pop('bn_momentum', None)
         kwargs.pop('bn_eps', None)
 
+    prompt_shallow = kwargs.pop('prompt_shallow', None)
+    prompt_deep = kwargs.pop('prompt_deep', None)
     prompt_length= kwargs.pop('prompt_length', None)
     embedding_key= kwargs.pop('embedding_key', None)
     prompt_init= kwargs.pop('prompt_init', None)
@@ -70,7 +74,9 @@ def create_model(
     head_type= kwargs.pop('head_type', None)
     use_prompt_mask= kwargs.pop('use_prompt_mask', None)
 
-    
+    kwargs['prompt_shallow'] = prompt_shallow
+    kwargs['prompt_deep'] = prompt_deep
+
     # handle backwards compat with drop_connect -> drop_path change
     drop_connect_rate = kwargs.pop('drop_connect_rate', None)
     if drop_connect_rate is not None and kwargs.get('drop_path_rate', None) is None:
