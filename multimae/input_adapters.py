@@ -246,15 +246,8 @@ class PromptPatchedInputAdapter(nn.Module):
             prompted_embedding = x['prompted_embedding']
             total_prompt_len = x['total_prompt_len']
             # 프롬프트 토큰을 제외한 텐서 반환
-            if self.prompt_shallow == True and self.prompt_deep == False:
-                x = prompted_embedding[:, total_prompt_len:, :]
-                return x
-            elif self.prompt_deep == True and self.prompt_shallow == False :
-                return x['prompted_embedding']  
-            # shallow 와 deep 중 하나는 선택해야함.
-            else : 
-                raise Exception("One of the prompt shallow and prompt deep must be activated.")
-    
+            return x['prompted_embedding']  
+        
 class SemSegInputAdapter(nn.Module):
     """
     Adapter for spatial inputs, like images or feature maps.

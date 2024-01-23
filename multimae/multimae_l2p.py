@@ -35,7 +35,7 @@ __all__ = [
     'multivit_base',
     'multivit_large',
 ]
-
+from multimae.prompt import Prompt
 
 class MultiMAE(nn.Module):
     """MultiMAE: Multi-task Multi-modal Masked Autoencoder
@@ -63,6 +63,9 @@ class MultiMAE(nn.Module):
                  output_adapters: Optional[Dict[str, nn.Module]],
                  prompt_shallow : bool , 
                  prompt_deep : bool,
+                 prompt_length : int = 5,
+                 pool_size : int = 10, 
+                 top_k : int = 5 , 
                  num_global_tokens: int = 1,
                  dim_tokens: int = 768,
                  depth: int = 12,
@@ -77,6 +80,15 @@ class MultiMAE(nn.Module):
 
         self.prompt_shallow = prompt_shallow
         self.prompt_deep = prompt_deep
+        self.prompt_length = prompt_length
+        self.pool_size = pool_size
+        self.top_k = top_k
+
+        self.prompt_instance = Prompt(length=prompt_length, 
+                                      embed_dim=dim_tokens, 
+                                      pool_size=pool_size,
+                                      prompt_pool=True,top_k = top_k)
+
 
         # Initialize input and output adapters
         for adapter in input_adapters.values():
@@ -325,8 +337,6 @@ class MultiMAE(nn.Module):
 
         input_task_tokens = input_task_tokens['prompted_embedding']
 
-        print(input_task_tokens)
-
         input_info = self.generate_input_info(input_task_tokens=input_task_tokens, image_size=(H, W))
 
         # Select random subset of tokens from the chosen input tasks and concatenate them
@@ -358,7 +368,6 @@ class MultiMAE(nn.Module):
         global_tokens = repeat(self.global_tokens, '() n d -> b n d', b=B)
         input_tokens = torch.cat([input_tokens, global_tokens], dim=1)
 
-        ## Transformer forward pass
         encoder_tokens = self.encoder(input_tokens)
 
         ## Output decoders
@@ -486,7 +495,18 @@ class MultiViT(MultiMAE):
         """
 
         input_tokens, input_info = self.process_input(x)
-        
+        # adding prompt
+        if self.prompt_deep:
+            for layer in self.encoder:
+                # 현재 토큰에 프롬프트 적용
+                prompt_output = self.prompt_instance(input_tokens)
+                input_tokens = prompt_output['prompted_embedding']
+                print(input_tokens.shape)
+                input_tokens = layer(input_tokens)
+            
+        if self.prompt_shallow:
+            input_tokens = self.encoder(input_tokens)
+
         # Pass tokens through Transformer
         if not return_all_layers:
             encoder_tokens = self.encoder(input_tokens)
@@ -517,12 +537,13 @@ class MultiViT(MultiMAE):
 def multivit_base(
         input_adapters: Dict[str, nn.Module],
         output_adapters: Optional[Dict[str, nn.Module]],
-        prompt_shallow, prompt_deep,
         **kwargs):
+
+    print(kwargs)
+
     model = MultiViT(
         input_adapters=input_adapters,
         output_adapters=output_adapters,
-        prompt_shallow=prompt_shallow, prompt_deep=prompt_deep,
         dim_tokens=768,
         depth=12,
         num_heads=12,

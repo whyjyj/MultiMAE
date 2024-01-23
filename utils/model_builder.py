@@ -28,14 +28,13 @@ def safe_model_name(model_name, remove_source=True):
 
 def create_model(
         model_name,
-        prompt_shallow,
-        prompt_deep,
         pretrained=False,
         checkpoint_path='',
         scriptable=None,
         exportable=None,
         no_jit=None,
         **kwargs):
+      
     """Create a model
 
     Args:
@@ -51,6 +50,7 @@ def create_model(
         global_pool (str): global pool type (default: 'avg')
         **: other kwargs are model specific
     """
+
     source_name, model_name = split_model_name(model_name)
 
     # Only EfficientNet and MobileNetV3 models have support for batchnorm params or drop_connect_rate passed as args
@@ -74,9 +74,6 @@ def create_model(
     head_type= kwargs.pop('head_type', None)
     use_prompt_mask= kwargs.pop('use_prompt_mask', None)
 
-    kwargs['prompt_shallow'] = prompt_shallow
-    kwargs['prompt_deep'] = prompt_deep
-
     # handle backwards compat with drop_connect -> drop_path change
     drop_connect_rate = kwargs.pop('drop_connect_rate', None)
     if drop_connect_rate is not None and kwargs.get('drop_path_rate', None) is None:
@@ -87,6 +84,9 @@ def create_model(
     # Parameters that aren't supported by all models or are intended to only override model defaults if set
     # should default to None in command line args/cfg. Remove them if they are present and not set so that
     # non-supporting models don't break and default args remain in effect.
+    kwargs['prompt_shallow'] = prompt_shallow
+    kwargs['prompt_deep'] = prompt_deep
+    
     kwargs = {k: v for k, v in kwargs.items()}
 
     create_fn = model_entrypoint(model_name)

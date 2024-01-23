@@ -345,8 +345,8 @@ def get_args():
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
     
     # when using prompt you should activate shallow or deep
-    parser.add_argument('--prompt_shallow' ,action='store_true')
-    parser.add_argument('--prompt_deep' ,action='store_true')
+    parser.add_argument('--prompt_shallow' ,default=False, type=bool)
+    parser.add_argument('--prompt_deep' ,default=True, type=bool)
     
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
@@ -521,10 +521,11 @@ def main(args):
         learnable_pos_emb=args.learnable_pos_emb,
         prompt_length=args.length,
         top_k=args.top_k,
-        pool_size=args.size,
-        prompt_shallow=args.prompt_shallow,
-        prompt_deep=args.prompt_deep)},
+        pool_size=args.size
+        )},
         output_adapters=output_adapters,
+        prompt_shallow = args.prompt_shallow,
+        prompt_deep = args.prompt_deep,
         drop_path_rate=args.drop_path_encoder,
         embedding_key=args.embedding_key,
         prompt_init=args.prompt_key_init,
@@ -533,9 +534,7 @@ def main(args):
         batchwise_prompt=args.batchwise_prompt,
         prompt_key_init=args.prompt_key_init,
         head_type=args.head_type,
-        use_prompt_mask=args.use_prompt_mask,
-        prompt_shallow = args.prompt_shallow,
-        prompt_deep = args.prompt_deep      
+        use_prompt_mask=args.use_prompt_mask
     )
 
     if args.finetune:
@@ -562,7 +561,7 @@ def main(args):
         # Load pre-trained model
         msg = model.load_state_dict(checkpoint_model, strict=False)
         print(msg)
-        
+
     if args.freeze:
         # all parameters are frozen for original vit model
         for p in original_model.parameters():
@@ -594,7 +593,8 @@ def main(args):
     print('number of original params : {} M'.format(original_n_parameters / 1e6))
 
     print('Parameter Efficiency : {} %'.format(((n_parameters) / original_n_parameters) * 100))
-    
+  
+
     if args.loss == 'l1':
         tasks_loss_fn = {
             'depth': masked_l1_loss
@@ -689,7 +689,7 @@ def main(args):
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, 
             in_domains=args.in_domains, fp16=args.fp16, return_all_layers=return_all_layers,
-            log_images=log_images
+            log_images=log_images,prompt_shallow =args.prompt_shallow , prompt_deep = args.prompt_deep
         )
         
         if args.output_dir and args.save_ckpt:
@@ -772,7 +772,7 @@ def main(args):
                 # f.write(json.dumps(log_stats) + "\n")
 
 
-def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
+def train_one_epoch(model: torch.nn.Module, prompt_shallow, prompt_deep,tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
@@ -843,7 +843,8 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
         
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
-            preds = model(input_dict, return_all_layers=return_all_layers)
+            preds = model(input_dict, prompt_deep = prompt_deep ,
+            prompt_shallow = prompt_shallow ,return_all_layers=return_all_layers)
             
             # 세그멘테이션 손실 계산
             seg_loss = 0
@@ -1228,18 +1229,3 @@ if __name__ == '__main__':
 
     # Call the main function
     main(opts)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
