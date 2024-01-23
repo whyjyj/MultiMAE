@@ -559,15 +559,12 @@ class ConvNeXtAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
         x = self.adapt_tokens(encoder_tokens, input_info)
-
-      
         
-        if self.prompt_deep :
-            total_tokens = x.shape[1]
-            desired_tokens = 1600
-            tokens_to_use = total_tokens - (total_tokens - desired_tokens)
-            x = x[:, :tokens_to_use, :]
-
+        total_tokens = x.shape[1]
+        desired_tokens = 256
+        tokens_to_use = total_tokens - desired_tokens 
+        x = x[:, tokens_to_use:, :]
+        
         x = self.proj_dec(x)
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",

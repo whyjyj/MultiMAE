@@ -345,8 +345,8 @@ def get_args():
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
     
     # when using prompt you should activate shallow or deep
-    parser.add_argument('--prompt_shallow' ,default=False, type=bool)
-    parser.add_argument('--prompt_deep' ,default=True, type=bool)
+    parser.add_argument('--prompt_shallow' ,default=False, action = 'store_true')
+    parser.add_argument('--prompt_deep' ,default=False, action = 'store_true')
     
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
@@ -499,6 +499,7 @@ def main(args):
         prompt_deep=False)},
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
+        prompt_pool = False,
         prompt_shallow = False,
         prompt_deep = False )
 
@@ -511,7 +512,7 @@ def main(args):
       print("Prompt deep mode")
     if not args.prompt_deep and args.prompt_shallow :
       print("Prompt shallow mode")
-
+    
     model = create_model(
         args.model,
         input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
@@ -534,6 +535,9 @@ def main(args):
         batchwise_prompt=args.batchwise_prompt,
         prompt_key_init=args.prompt_key_init,
         head_type=args.head_type,
+        prompt_length=args.length,
+        top_k=args.top_k,
+        pool_size=args.size,
         use_prompt_mask=args.use_prompt_mask
     )
 
@@ -575,10 +579,10 @@ def main(args):
             if 'input_adapters' in name or 'output_adapters' in name:
                 param.requires_grad = True
 
-        #check frozen well 
-        # for n,p in model.named_parameters():
-        #   if p.requires_grad:
-        #     print('Unfrozen :' , n)
+    # check frozen well 
+    # for n,p in model.named_parameters():
+    #     if p.requires_grad:
+    #       print('Unfrozen :' , n)
 
     original_model.to(device)            
     model.to(device)
@@ -586,8 +590,7 @@ def main(args):
     model_without_ddp = model
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    prompt_params = sum(p.numel() for p in model.input_adapters['rgb'].prompt.parameters() if p.requires_grad)
-    print("Number of parameters in prompt: {} M".format(prompt_params/1e6))
+    
     # print("Model = %s" % str(model_without_ddp))
     print('number of l2p model params: {} M'.format(n_parameters / 1e6))
     print('number of original params : {} M'.format(original_n_parameters / 1e6))

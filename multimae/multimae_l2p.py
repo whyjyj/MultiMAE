@@ -63,9 +63,10 @@ class MultiMAE(nn.Module):
                  output_adapters: Optional[Dict[str, nn.Module]],
                  prompt_shallow : bool , 
                  prompt_deep : bool,
-                 prompt_length : int = 5,
-                 pool_size : int = 10, 
-                 top_k : int = 5 , 
+                 prompt_length : int ,
+                 pool_size : int , 
+                 top_k : int  , 
+                 prompt_pool : bool,
                  num_global_tokens: int = 1,
                  dim_tokens: int = 768,
                  depth: int = 12,
@@ -83,12 +84,18 @@ class MultiMAE(nn.Module):
         self.prompt_length = prompt_length
         self.pool_size = pool_size
         self.top_k = top_k
+        self.prompt_pool = prompt_pool
 
-        self.prompt_instance = Prompt(length=prompt_length, 
-                                      embed_dim=dim_tokens, 
-                                      pool_size=pool_size,
-                                      prompt_pool=True,top_k = top_k)
-
+        if self.prompt_pool:
+            if self.prompt_deep:
+                self.layer_prompt_pools = nn.ModuleList([
+                    Prompt(length=prompt_length, 
+                          embed_dim=dim_tokens, 
+                          pool_size=pool_size,
+                          prompt_pool=True,
+                          top_k=top_k)
+                    for _ in range(depth)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                ])
 
         # Initialize input and output adapters
         for adapter in input_adapters.values():
@@ -456,7 +463,6 @@ class MultiViT(MultiMAE):
     :param drop_path_rate: DropPath drop rate
     :param norm_layer: Type of normalization layer
     """
-
     def process_input(self, x):
         # If input x is a Tensor, assume it's RGB
         x = {'rgb': x} if isinstance(x, torch.Tensor) else x
@@ -495,18 +501,22 @@ class MultiViT(MultiMAE):
         """
 
         input_tokens, input_info = self.process_input(x)
-        # adding prompt
-        if self.prompt_deep:
-            for layer in self.encoder:
-                # 현재 토큰에 프롬프트 적용
-                prompt_output = self.prompt_instance(input_tokens)
-                input_tokens = prompt_output['prompted_embedding']
-                print(input_tokens.shape)
-                input_tokens = layer(input_tokens)
-            
-        if self.prompt_shallow:
-            input_tokens = self.encoder(input_tokens)
 
+        if self.prompt_deep:
+            for i, layer in enumerate(self.encoder):
+                total_tokens = input_tokens.shape[1]
+                desired_tokens = 256
+                tokens_to_use = total_tokens - desired_tokens 
+                input_tokens = input_tokens[:, tokens_to_use:, :]
+                
+                prompt_instance = self.layer_prompt_pools[i]  # 해당 레이어의 프롬프트 풀 선택
+                prompt_output = prompt_instance(input_tokens)
+                input_tokens = prompt_output['prompted_embedding']
+                input_tokens = layer(input_tokens)
+  
+        else:
+            input_tokens = self.encoder(input_tokens)
+            
         # Pass tokens through Transformer
         if not return_all_layers:
             encoder_tokens = self.encoder(input_tokens)
