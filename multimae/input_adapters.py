@@ -243,9 +243,6 @@ class PromptPatchedInputAdapter(nn.Module):
 
         if self.prompt_pool :
             x = self.prompt(x)
-            prompted_embedding = x['prompted_embedding']
-            total_prompt_len = x['total_prompt_len']
-            # 프롬프트 토큰을 제외한 텐서 반환
             return x['prompted_embedding']  
         
 class SemSegInputAdapter(nn.Module):

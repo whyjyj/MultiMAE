@@ -86,6 +86,10 @@ def create_model(
     # non-supporting models don't break and default args remain in effect.
     kwargs['prompt_shallow'] = prompt_shallow
     kwargs['prompt_deep'] = prompt_deep
+    kwargs['pool_size'] = pool_size
+    kwargs['top_k'] = top_k
+    kwargs['prompt_pool'] = prompt_pool
+    kwargs['prompt_length'] = prompt_length
     
     kwargs = {k: v for k, v in kwargs.items()}
 

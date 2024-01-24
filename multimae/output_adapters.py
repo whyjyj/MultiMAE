@@ -561,7 +561,7 @@ class ConvNeXtAdapter(nn.Module):
         x = self.adapt_tokens(encoder_tokens, input_info)
         
         total_tokens = x.shape[1]
-        desired_tokens = 256
+        desired_tokens = N_H * N_W
         tokens_to_use = total_tokens - desired_tokens 
         x = x[:, tokens_to_use:, :]
         
@@ -596,6 +596,12 @@ class DPTOutputAdapter(nn.Module):
     """
 
     def __init__(self,
+                 prompt_pool: bool,
+                 prompt_shallow :bool,
+                 prompt_deep : bool ,
+                 prompt_length : int,
+                 top_k : int,
+                 pool_size : int,
                  num_classes: int = 3,
                  stride_level: int = 1,
                  patch_size: Union[int, Tuple[int, int]] = 16,
@@ -608,6 +614,12 @@ class DPTOutputAdapter(nn.Module):
                  head_type: str = 'regression',
                  **kwargs):
         super().__init__()
+        self.prompt_pool: prompt_pool
+        self.prompt_shallow :prompt_shallow
+        self.prompt_deep : prompt_deep 
+        self.prompt_length : prompt_length
+        self.top_k : top_k
+        self.pool_size : pool_size 
         self.num_channels = num_classes
         self.stride_level = stride_level
         self.patch_size = pair(patch_size)
@@ -738,9 +750,21 @@ class DPTOutputAdapter(nn.Module):
         # Number of patches in height and width
         N_H = H // (self.stride_level * self.P_H)
         N_W = W // (self.stride_level * self.P_W)
-
-        # Hook decoder onto 4 layers from specified ViT layers
-        layers = [encoder_tokens[hook] for hook in self.hooks]
+        
+        want_length  = N_H * N_W # 900 or 1600.. 
+        
+        if self.prompt_pool :
+            layers = []
+            for hook in self.hooks :
+                total_tokens = encoder_tokens.shape[1]
+                cut = total_tokens - want_length
+                # Assuming prompt_length is the length of prompt tokens for each layer
+                # Define or calculate the length of the prompt
+                layers.append(encoder_tokens[hook][:, cut : total_tokens])
+                
+        else:   
+            # Hook decoder onto 4 layers from specified ViT layers
+            layers = [encoder_tokens[hook] for hook in self.hooks]
 
         # Extract only task-relevant tokens and ignore global tokens.
         layers = [self.adapt_tokens(l, input_info) for l in layers]

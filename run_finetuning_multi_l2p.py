@@ -177,7 +177,7 @@ def get_args():
     # Model parameters
     parser.add_argument('--model', default='multivit_base', type=str, metavar='MODEL',
                         help='Name of model to train')
-    parser.add_argument('--num_global_tokens', default=1, type=int,
+    parser.add_argument('--num_global_tokens', default=0, type=int,
                         help='number of global tokens to add to encoder')
     parser.add_argument('--patch_size', default=16, type=int,
                         help='base patch size for image-like modalities')
@@ -350,7 +350,6 @@ def get_args():
     
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
-    parser.add_argument('--head_type', default='prompt', choices=['token', 'gap', 'prompt', 'token+prompt'], type=str, help='input type of classification head')
     parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
 
     # Do we have a config file to parse?
@@ -471,40 +470,21 @@ def main(args):
         'segmenter': partial(SegmenterMaskTransformerAdapter, depth=args.decoder_depth, drop_path_rate=args.drop_path_decoder),
         'convnext': partial(ConvNeXtAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
                             interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
-        'dpt': partial(DPTOutputAdapter, stride_level=1, main_tasks=args.decoder_main_tasks.split('-'), head_type='semseg'),
+        'dpt': DPTOutputAdapter,
     }
 
     output_adapters = {
-        'semseg': adapters_dict[args.output_adapter](
+        'semseg': adapters_dict['convnext'](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, prompt_deep = args.prompt_deep
         ),
-        'depth' : adapters_dict[args.output_adapter](num_classes=DOMAIN_CONF['depth']['channels'],
+        'depth' : adapters_dict['dpt'](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size,
-            main_tasks=args.decoder_main_tasks.split('-'), prompt_deep = args.prompt_deep
+            main_tasks=args.decoder_main_tasks.split('-'), prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size
             )
     }
-
-    print(f"Creating original model: {args.model}")
-
-    original_model = create_model(
-        args.model,
-        input_adapters ={'rgb': PatchedInputAdapter(num_channels=3,
-        stride_level=1,
-        patch_size_full=args.patch_size,
-        image_size=args.input_size,
-        learnable_pos_emb=args.learnable_pos_emb,
-        prompt_shallow=False,
-        prompt_deep=False)},
-        output_adapters=output_adapters,
-        drop_path_rate=args.drop_path_encoder,
-        prompt_pool = False,
-        prompt_shallow = False,
-        prompt_deep = False )
-
-
-    original_n_parameters =  sum(p.numel() for p in original_model.parameters() if p.requires_grad)
 
     print(f"Creating model: {args.model}", "for PEFT")
     
@@ -534,7 +514,6 @@ def main(args):
         prompt_key=args.prompt_key,
         batchwise_prompt=args.batchwise_prompt,
         prompt_key_init=args.prompt_key_init,
-        head_type=args.head_type,
         prompt_length=args.length,
         top_k=args.top_k,
         pool_size=args.size,
@@ -567,9 +546,6 @@ def main(args):
         print(msg)
 
     if args.freeze:
-        # all parameters are frozen for original vit model
-        for p in original_model.parameters():
-            p.requires_grad = False
         # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
         for n, p in model.named_parameters():
             if n.startswith('encoder'):
@@ -583,8 +559,7 @@ def main(args):
     # for n,p in model.named_parameters():
     #     if p.requires_grad:
     #       print('Unfrozen :' , n)
-
-    original_model.to(device)            
+          
     model.to(device)
 
     model_without_ddp = model
@@ -593,10 +568,6 @@ def main(args):
     
     # print("Model = %s" % str(model_without_ddp))
     print('number of l2p model params: {} M'.format(n_parameters / 1e6))
-    print('number of original params : {} M'.format(original_n_parameters / 1e6))
-
-    print('Parameter Efficiency : {} %'.format(((n_parameters) / original_n_parameters) * 100))
-  
 
     if args.loss == 'l1':
         tasks_loss_fn = {
