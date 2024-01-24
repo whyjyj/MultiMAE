@@ -103,7 +103,8 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler,ext
 
 
 def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, model_ema=None):
-    output_dir = Path(args.output_dir)
+    od = f'{args.output_dir}-mode={args.output_dir}-img_size={args.input_size}-loss={args.loss}-lr={args.lr}-adapter={args.output_adapter}-weight_decay={args.weight_decay}-input_size={args.input_size}-drop_path_encoder={args.drop_path_encoder}-color_augs={args.color_augs}'
+    output_dir = Path(od)
     if loss_scaler is not None:
         # torch.amp
         if args.auto_resume and len(args.resume) == 0:

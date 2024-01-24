@@ -345,6 +345,7 @@ def get_args():
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
     
     # when using prompt you should activate shallow or deep
+    parser.add_argument('--prompt_mode' , default = None )
     parser.add_argument('--prompt_shallow' ,default=False, action = 'store_true')
     parser.add_argument('--prompt_deep' ,default=False, action = 'store_true')
     
@@ -481,13 +482,13 @@ def main(args):
             prompt_pool = args.prompt_pool,
             prompt_length = args.length , top_k = args.top_k , pool_size = args.size
         ),
-        'depth' : adapters_dict['dpt'](num_classes=DOMAIN_CONF['depth']['channels'],
+        'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
-            patch_size=args.patch_size,
-            main_tasks=args.decoder_main_tasks.split('-'), prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
+            patch_size=args.patch_size, 
+            prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
             prompt_length = args.length , top_k = args.top_k , pool_size = args.size
-            )
+        )
     }
 
     print(f"Creating model: {args.model}", "for PEFT")
@@ -609,7 +610,7 @@ def main(args):
     optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
             get_layer_scale=assigner.get_scale if assigner is not None else None)
-    loss_scaler = NativeScaler(enabled=args.fp16)
+    loss_scaler(enabled=args.fp16)
 
     print("Use step level LR & WD scheduler!")
     lr_schedule_values = utils.cosine_scheduler(
@@ -754,7 +755,7 @@ def main(args):
 def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
  pool_size, prompt_shallow, prompt_deep, tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
-                    loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
+                    loss_scaler, max_norm: float = 1.0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
                     return_all_layers=False, standardize_depth=True, log_images=False):
     model.train()
@@ -1200,8 +1201,8 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}=-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:

@@ -43,6 +43,7 @@ eval_freq: 200
 find_unused_params: False
 
 #prompt
+prompt_mode : deep
 prompt_pool : True
 prompt_shallow : False
 prompt_deep : True
