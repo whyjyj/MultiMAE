@@ -339,7 +339,7 @@ def get_args():
     parser.add_argument('--shared_prompt_pool', default=False, type=bool)
     parser.add_argument('--shared_prompt_key', default=False, type=bool)
     parser.add_argument('--batchwise_prompt', default=True, type=bool)
-    parser.add_argument('--embedding_key', default='cls', type=str)
+    parser.add_argument('--embedding_key', default='mean', type=str)
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
@@ -476,7 +476,10 @@ def main(args):
     output_adapters = {
         'semseg': adapters_dict['convnext'](
             num_classes=args.num_classes_with_void,
-            embed_dim=args.decoder_dim, patch_size=args.patch_size, prompt_deep = args.prompt_deep
+            embed_dim=args.decoder_dim, patch_size=args.patch_size, 
+            prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_pool = args.prompt_pool,
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size
         ),
         'depth' : adapters_dict['dpt'](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
@@ -490,10 +493,10 @@ def main(args):
     print(f"Creating model: {args.model}", "for PEFT")
     
     if args.prompt_deep and not args.prompt_shallow :
-      print("Prompt deep mode")
+        print("Prompt deep mode")
     if not args.prompt_deep and args.prompt_shallow :
-      print("Prompt shallow mode")
-    
+        print("Prompt shallow mode")
+        
     model = create_model(
         args.model,
         input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
