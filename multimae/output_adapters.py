@@ -546,15 +546,16 @@ class ConvNeXtAdapter(nn.Module):
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
         x = []
+        temp_tokens =  encoder_tokens[-1]
         for task in self.main_tasks:
             start_idx = input_info['tasks'][task]['start_idx']
             end_idx = input_info['tasks'][task]['end_idx']
-            x.append(encoder_tokens[:, start_idx:end_idx])
+            x.append(temp_tokens[:, start_idx:end_idx])
 
         x = torch.cat(x, dim=-1)
         return x
 
-    def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
+    def forward(self, prompt_pool : bool, encoder_tokens: torch.Tensor, input_info: Dict):
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
@@ -614,6 +615,7 @@ class DPTOutputAdapter(nn.Module):
                  head_type: str = 'regression',
                  **kwargs):
         super().__init__()
+        
         self.prompt_pool: prompt_pool
         self.prompt_shallow :prompt_shallow
         self.prompt_deep : prompt_deep 
@@ -756,7 +758,7 @@ class DPTOutputAdapter(nn.Module):
         if self.prompt_pool :
             layers = []
             for hook in self.hooks :
-                total_tokens = encoder_tokens.shape[1]
+                total_tokens = encoder_tokens[0].shape[1]
                 cut = total_tokens - want_length
                 # Assuming prompt_length is the length of prompt tokens for each layer
                 # Define or calculate the length of the prompt

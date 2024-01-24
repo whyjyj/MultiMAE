@@ -443,7 +443,6 @@ def pretrain_multimae_large(
     )
     return model
 
-
 class MultiViT(MultiMAE):
     """MultiViT: Multi-modal Vision Transformer
     This is MultiMAE without masking and with a simplified / faster forward pass

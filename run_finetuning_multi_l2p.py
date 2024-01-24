@@ -482,6 +482,7 @@ def main(args):
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size,
             main_tasks=args.decoder_main_tasks.split('-'), prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_pool = args.prompt_pool,
             prompt_length = args.length , top_k = args.top_k , pool_size = args.size
             )
     }
@@ -623,8 +624,8 @@ def main(args):
     print("semseg criterion = %s" % str(criterion))
     print("depth criterion = %s" % tasks_loss_fn)
     # Specifies if transformer encoder should only return last layer or all layers for DPT
-    return_all_layers = args.output_adapter in ['dpt']
-
+    return_all_layers = True
+    
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
@@ -663,7 +664,8 @@ def main(args):
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, 
             in_domains=args.in_domains, fp16=args.fp16, return_all_layers=return_all_layers,
-            log_images=log_images,prompt_shallow =args.prompt_shallow , prompt_deep = args.prompt_deep
+            log_images=log_images,prompt_shallow =args.prompt_shallow , prompt_deep = args.prompt_deep,
+            prompt_pool = args.prompt_pool, pool_size = args.size , prompt_length=  args.length ,top_k = args.top_k
         )
         
         if args.output_dir and args.save_ckpt:
@@ -746,7 +748,8 @@ def main(args):
                 # f.write(json.dumps(log_stats) + "\n")
 
 
-def train_one_epoch(model: torch.nn.Module, prompt_shallow, prompt_deep,tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
+def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
+ pool_size, prompt_shallow, prompt_deep, tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
@@ -817,9 +820,9 @@ def train_one_epoch(model: torch.nn.Module, prompt_shallow, prompt_deep,tasks_lo
         
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
-            preds = model(input_dict, prompt_deep = prompt_deep ,
+            preds = model(input_dict, prompt_pool = prompt_pool , top_k = top_k, prompt_length = prompt_length ,
+                          pool_size = pool_size , prompt_deep = prompt_deep ,
             prompt_shallow = prompt_shallow ,return_all_layers=return_all_layers)
-            
             # 세그멘테이션 손실 계산
             seg_loss = 0
             if 'semseg' in tasks_dict:
@@ -1194,8 +1197,8 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.output_dir = f'{opts.output_dir}-img_size=480-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-img_size=480-mode=l2p_deep-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:
