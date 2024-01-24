@@ -500,18 +500,24 @@ class MultiViT(MultiMAE):
         """
 
         input_tokens, input_info = self.process_input(x)
-
+        
+        prompt_input_size = self.top_k * self.prompt_length
+        
         if self.prompt_deep:
             for i, layer in enumerate(self.encoder):
-                total_tokens = input_tokens.shape[1]
-                desired_tokens = 256
-                tokens_to_use = total_tokens - desired_tokens 
-                input_tokens = input_tokens[:, tokens_to_use:, :]
-                
-                prompt_instance = self.layer_prompt_pools[i]  # 해당 레이어의 프롬프트 풀 선택
-                prompt_output = prompt_instance(input_tokens)
-                input_tokens = prompt_output['prompted_embedding']
-                input_tokens = layer(input_tokens)
+                if i == 0:
+                    prompt_instance = self.layer_prompt_pools[0]  # 해당 레이어의 프롬프트 풀 선택
+                    prompt_output = prompt_instance(input_tokens)
+                    input_tokens = prompt_output['prompted_embedding']
+                    input_tokens = layer(input_tokens)
+                else:
+                        
+                    input_tokens = input_tokens[:, prompt_input_size:, :]
+                    
+                    prompt_instance = self.layer_prompt_pools[i]  # 해당 레이어의 프롬프트 풀 선택
+                    prompt_output = prompt_instance(input_tokens)
+                    input_tokens = prompt_output['prompted_embedding']
+                    input_tokens = layer(input_tokens)
   
         else:
             input_tokens = self.encoder(input_tokens)
