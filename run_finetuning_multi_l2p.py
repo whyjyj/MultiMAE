@@ -553,7 +553,7 @@ def main(args):
                 p.requires_grad = False
 
         for name, param in model.named_parameters():
-            if 'input_adapters' in name or 'output_adapters' in name:
+            if 'output_adapters' in name:
                 param.requires_grad = True
 
     # check frozen well 
