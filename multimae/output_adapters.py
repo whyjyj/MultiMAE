@@ -495,6 +495,7 @@ class ConvNeXtAdapter(nn.Module):
     def __init__(
             self,
             num_classes,
+            prompt_pool : bool , 
             prompt_deep : bool , 
             embed_dim: int = 6144,
             preds_per_patch: int = 16,
@@ -505,6 +506,7 @@ class ConvNeXtAdapter(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.prompt_pool = prompt_pool
         self.prompt_deep = prompt_deep
         self.main_tasks = main_tasks
         self.patch_size = patch_size
@@ -521,7 +523,7 @@ class ConvNeXtAdapter(nn.Module):
         self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
         self.apply(self._init_weights)
 
-    def init(self,prompt_deep :bool, dim_tokens_enc: int = 768 ):
+    def init(self, dim_tokens_enc: int = 768 ):
         """
         Initialize parts of decoder that are dependent on dimension of encoder tokens.
         Should be called when setting up MultiMAE.
@@ -555,7 +557,7 @@ class ConvNeXtAdapter(nn.Module):
         x = torch.cat(x, dim=-1)
         return x
 
-    def forward(self, prompt_pool : bool, encoder_tokens: torch.Tensor, input_info: Dict):
+    def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
@@ -616,12 +618,12 @@ class DPTOutputAdapter(nn.Module):
                  **kwargs):
         super().__init__()
         
-        self.prompt_pool: prompt_pool
-        self.prompt_shallow :prompt_shallow
-        self.prompt_deep : prompt_deep 
-        self.prompt_length : prompt_length
-        self.top_k : top_k
-        self.pool_size : pool_size 
+        self.prompt_pool= prompt_pool
+        self.prompt_shallow = prompt_shallow
+        self.prompt_deep =  prompt_deep 
+        self.prompt_length =  prompt_length
+        self.top_k =  top_k
+        self.pool_size =  pool_size 
         self.num_channels = num_classes
         self.stride_level = stride_level
         self.patch_size = pair(patch_size)

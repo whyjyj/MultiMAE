@@ -106,7 +106,7 @@ class MultiMAE(nn.Module):
         if output_adapters is not None:
             for adapter in output_adapters.values():
                 adapter.init(dim_tokens_enc=dim_tokens,
-                prompt_deep = prompt_deep)
+                )
             self.output_adapters = nn.ModuleDict(output_adapters)
         else:
             self.output_adapters = None
