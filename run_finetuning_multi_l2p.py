@@ -839,7 +839,9 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
 
             # 총 손실 계산 및 역전파
-            loss = seg_loss + depth_loss
+            weight_seg = torch.nn.Parameter(torch.tensor(0.5))
+            weight_depth = torch.nn.Parameter(torch.tensor(0.5))
+            loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
 
         loss_value = loss.item()
         seg_loss_value = seg_loss.item()
@@ -894,6 +896,15 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
     print("Averaged stats:", metric_logger)
     return {'[Epoch] ' + k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
+    # 가중치의 합이 1이 되도록 정규화
+    total_weight = weight_seg + weight_depth
+    normalized_weight_seg = weight_seg / total_weight
+    normalized_weight_depth = weight_depth / total_weight
+
+    # 가중치를 적용한 총 손실 계산
+    total_loss = normalized_weight_seg * seg_loss + normalized_weight_depth * depth_loss
+    return total_loss
 
 @torch.no_grad()
 def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
