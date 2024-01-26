@@ -202,7 +202,12 @@ def get_args():
     parser.add_argument('--decoder_interpolate_mode', type=str, default='bilinear',
                         choices=['bilinear', 'nearest'], help='for convnext adapter')
 
+    # Prompts
 
+    parser.add_argument('--prompt_pool' , type = bool , default = False)
+    parser.add_argument('--prompt_shallow' , type = bool , default = False)
+    parser.add_argument('--prompt_deep' , type = bool , default = False)
+    
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
                         help='Optimizer (default: "adamw"')

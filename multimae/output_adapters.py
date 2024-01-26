@@ -654,14 +654,23 @@ class ConvNeXtAdapterdepth(nn.Module):
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
         x = []
-        encoder_tokens =  encoder_tokens[-1]
-        for task in self.main_tasks:
-            start_idx = input_info['tasks'][task]['start_idx']
-            end_idx = input_info['tasks'][task]['end_idx']
-            x.append(encoder_tokens[:, start_idx:end_idx])
+        if self.prompt_pool :
+            for task in self.main_tasks:
+                start_idx = input_info['tasks'][task]['start_idx']
+                end_idx = input_info['tasks'][task]['end_idx']
+                x.append(encoder_tokens[:, start_idx:end_idx])
 
-        x = torch.cat(x, dim=-1)
-        return x
+            x = torch.cat(x, dim=-1)
+            return x
+        else:
+            tokens =  encoder_tokens[-1]
+            for task in self.main_tasks:
+                start_idx = input_info['tasks'][task]['start_idx']
+                end_idx = input_info['tasks'][task]['end_idx']
+                x.append(tokens[:, start_idx:end_idx,:])
+
+            x = torch.cat(x, dim=-1)
+            return x            
 
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
         H, W = input_info['image_size']
@@ -892,197 +901,3 @@ class DPTOutputAdapter(nn.Module):
         out = self.head(path_1)
 
         return out
-
-class MultitaskDPTOutputAdapter(nn.Module):
-    """Multi-task DPT output adapter.
-
-    :param num_classes: Number of output channels
-    :param stride_level: tride level compared to the full-sized image.
-        E.g. 4 for 1/4th the size of the image.
-    :param patch_size_full: Int or tuple of the patch size over the full image size.
-        Patch size for smaller inputs will be computed accordingly.
-    :param hooks: Index of intermediate layers
-    :param layer_dims: Dimension of intermediate layers
-    :param feature_dim: Feature dimension
-    :param use_bn: If set to True, activates batch norm
-    :param dim_tokens_enc:  Dimension of tokens coming from encoder
-    """
-
-    def __init__(self,
-                 num_classes_depth: int = 1,
-                 num_classes_seg: int = 40,
-                 stride_level: int = 1,
-                 patch_size: Union[int, Tuple[int, int]] = 16,
-                 main_tasks: Iterable[str] = ('rgb',),
-                 hooks: List[int] = [2, 5, 8, 11],
-                 layer_dims: List[int] = [96, 192, 384, 768],
-                 feature_dim: int = 256,
-                 use_bn: bool = False,
-                 dim_tokens_enc: Optional[int] = None,
-                 **kwargs):
-        super().__init__()
-        self.use_bn = use_bn
-        self.num_classes_depth = num_classes_depth
-        self.num_classes_seg = num_classes_seg
-        self.stride_level = stride_level
-        self.patch_size = pair(patch_size)
-        self.main_tasks = main_tasks
-        self.hooks = hooks
-        self.layer_dims = layer_dims
-        self.feature_dim = feature_dim
-        self.dim_tokens_enc = dim_tokens_enc * len(self.main_tasks) if dim_tokens_enc is not None else None
-
-
-        # Actual patch height and width, taking into account stride of input
-        self.P_H = max(1, self.patch_size[0] // stride_level)
-        self.P_W = max(1, self.patch_size[1] // stride_level)
-
-        self.scratch = make_scratch(layer_dims, feature_dim, groups=1, expand=False)
-
-        self.scratch.refinenet1 = make_fusion_block(feature_dim, use_bn)
-        self.scratch.refinenet2 = make_fusion_block(feature_dim, use_bn)
-        self.scratch.refinenet3 = make_fusion_block(feature_dim, use_bn)
-        self.scratch.refinenet4 = make_fusion_block(feature_dim, use_bn)
-        
-        self.head_depth = self.create_head(self.feature_dim,self.num_classes_depth,head_type='regression')
-        self.head_seg = self.create_head(self.feature_dim,self.num_classes_seg,head_type='semseg')
-    
-    def create_head(self, feature_dim, num_classes, head_type) :
-        if head_type == 'regression':
-            # The "DPTDepthModel" head
-            head = nn.Sequential(
-                nn.Conv2d(feature_dim, feature_dim // 2, kernel_size=3, stride=1, padding=1),
-                Interpolate(scale_factor=2, mode="bilinear", align_corners=True),
-                nn.Conv2d(feature_dim // 2, 32, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(True),
-                nn.Conv2d(32, num_classes, kernel_size=1, stride=1, padding=0)
-            )
-        elif head_type == 'semseg':
-            # The "DPTSegmentationModel" head
-            head = nn.Sequential(
-                nn.Conv2d(feature_dim, feature_dim, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(feature_dim) if self.use_bn else nn.Identity(),
-                nn.ReLU(True),
-                nn.Dropout(0.1, False),
-                nn.Conv2d(feature_dim, num_classes, kernel_size=1),
-                Interpolate(scale_factor=2, mode="bilinear", align_corners=True),
-            )
-        else:
-            raise ValueError('DPT head_type must be "regression" or "semseg".')
-
-        if self.dim_tokens_enc is not None:
-            self.init(dim_tokens_enc=self.dim_tokens_enc)
-        
-        return head
-
-    def init(self, dim_tokens_enc: int = 768):
-        """
-        Initialize parts of decoder that are dependent on dimension of encoder tokens.
-        Should be called when setting up MultiMAE.
-
-        :param dim_tokens_enc: Dimension of tokens coming from encoder
-        """
-        self.dim_tokens_enc = dim_tokens_enc * len(self.main_tasks)
-
-        # Set up activation postprocessing layers
-
-        self.act_1_postprocess = nn.Sequential(
-            nn.Conv2d(
-                in_channels=self.dim_tokens_enc,
-                out_channels=self.layer_dims[0],
-                kernel_size=1, stride=1, padding=0,
-            ),
-            nn.ConvTranspose2d(
-                in_channels=self.layer_dims[0],
-                out_channels=self.layer_dims[0],
-                kernel_size=4, stride=4, padding=0,
-                bias=True, dilation=1, groups=1,
-            )
-        )
-
-        self.act_2_postprocess = nn.Sequential(
-            nn.Conv2d(
-                in_channels=self.dim_tokens_enc,
-                out_channels=self.layer_dims[1],
-                kernel_size=1, stride=1, padding=0,
-            ),
-            nn.ConvTranspose2d(
-                in_channels=self.layer_dims[1],
-                out_channels=self.layer_dims[1],
-                kernel_size=2, stride=2, padding=0,
-                bias=True, dilation=1, groups=1,
-            )
-        )
-
-        self.act_3_postprocess = nn.Sequential(
-            nn.Conv2d(
-                in_channels=self.dim_tokens_enc,
-                out_channels=self.layer_dims[2],
-                kernel_size=1, stride=1, padding=0,
-            )
-        )
-
-        self.act_4_postprocess = nn.Sequential(
-            nn.Conv2d(
-                in_channels=self.dim_tokens_enc,
-                out_channels=self.layer_dims[3],
-                kernel_size=1, stride=1, padding=0,
-            ),
-            nn.Conv2d(
-                in_channels=self.layer_dims[3],
-                out_channels=self.layer_dims[3],
-                kernel_size=3, stride=2, padding=1,
-            )
-        )
-
-        self.act_postprocess = nn.ModuleList([
-            self.act_1_postprocess,
-            self.act_2_postprocess,
-            self.act_3_postprocess,
-            self.act_4_postprocess
-        ])
-
-    def adapt_tokens(self, encoder_tokens, input_info):
-        # Adapt tokens
-        x = []
-        for task in self.main_tasks:
-            start_idx = input_info['tasks'][task]['start_idx']
-            end_idx = input_info['tasks'][task]['end_idx']
-            x.append(encoder_tokens[:, start_idx:end_idx])
-
-        x = torch.cat(x, dim=-1)
-        return x
-
-    def forward(self, encoder_tokens: List[torch.Tensor], input_info: Dict):
-        assert self.dim_tokens_enc is not None, 'Need to call init(dim_tokens_enc) function first'
-        H, W = input_info['image_size']
-        # Number of patches in height and width
-        N_H = H // (self.stride_level * self.P_H)
-        N_W = W // (self.stride_level * self.P_W)
-
-        # Hook decoder onto 4 layers from specified ViT layers
-        layers = [encoder_tokens[hook] for hook in self.hooks]
-
-        # Extract only task-relevant tokens and ignore global tokens.
-        layers = [self.adapt_tokens(l, input_info) for l in layers]
-
-        # Reshape tokens to spatial representation
-        layers = [rearrange(l, 'b (nh nw) c -> b c nh nw', nh=N_H, nw=N_W) for l in layers]
-
-        # Postprocess activations
-        layers = [self.act_postprocess[idx](l) for idx, l in enumerate(layers)]
-
-        # Project layers to chosen feature dim
-        layers = [self.scratch.layer_rn[idx](l) for idx, l in enumerate(layers)]
-
-        # Fuse layers using refinement stages
-        path_4 = self.scratch.refinenet4(layers[3])
-        path_3 = self.scratch.refinenet3(path_4, layers[2])
-        path_2 = self.scratch.refinenet2(path_3, layers[1])
-        path_1 = self.scratch.refinenet1(path_2, layers[0])
-
-        # Output head
-        out_depth = self.head_depth(path_1)
-        out_seg = self.head_seg(path_1)
-
-        return out_depth, out_seg
