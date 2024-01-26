@@ -843,9 +843,11 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             weight_depth = torch.nn.Parameter(torch.tensor(0.5))
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
 
+        total_loss = seg_loss + depth_loss
         loss_value = loss.item()
         seg_loss_value = seg_loss.item()
         depth_loss_value = depth_loss.item()
+        total_loss_value = total_loss.item()
 
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
@@ -858,9 +860,11 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         torch.cuda.synchronize()
 
         # Metrics and logging
+        metric_logger.update(total_loss=total_loss_value)
         metric_logger.update(loss=loss_value)
         metric_logger.update(seg_loss=seg_loss_value)
         metric_logger.update(depth_loss=depth_loss_value)
+
         if fp16:
             metric_logger.update(loss_scale=loss_scale_value)
         min_lr = 10.
