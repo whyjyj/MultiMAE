@@ -549,10 +549,11 @@ class ConvNeXtAdapter(nn.Module):
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
         x = []
+        final_tokens = encoder_tokens[-1]
         for task in self.main_tasks:
             start_idx = input_info['tasks'][task]['start_idx']
             end_idx = input_info['tasks'][task]['end_idx']
-            x.append(encoder_tokens[:, start_idx:end_idx,:])
+            x.append(final_tokens[:, start_idx:end_idx,:])
 
         x = torch.cat(x, dim=-1)
         return x
