@@ -85,7 +85,11 @@ class MultiMAE(nn.Module):
         self.pool_size = pool_size
         self.top_k = top_k
         self.prompt_pool = prompt_pool
-
+        
+        #learnable weight
+        self.weight_seg = torch.nn.Parameter(torch.tensor(0.5))
+        self.weight_depth = torch.nn.Parameter(torch.tensor(0.5))
+        
         if self.prompt_pool:
             if self.prompt_deep:
                 self.layer_prompt_pools = nn.ModuleList([

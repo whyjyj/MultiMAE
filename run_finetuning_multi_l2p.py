@@ -606,7 +606,6 @@ def main(args):
     skip_weight_decay_list = model.no_weight_decay()
     print("Skip weight decay list: ", skip_weight_decay_list)
 
-
     optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
             get_layer_scale=assigner.get_scale if assigner is not None else None)
@@ -663,7 +662,8 @@ def main(args):
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         
         train_stats = train_one_epoch(
-            model=model, tasks_loss_fn=tasks_loss_fn, criterion=criterion, data_loader=data_loader_train,
+            model=model, tasks_loss_fn=tasks_loss_fn,
+            criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, 
@@ -753,7 +753,7 @@ def main(args):
 
 
 def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
- pool_size, prompt_shallow, prompt_deep, tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
+ pool_size, prompt_shallow, prompt_deep,tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 1.0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
@@ -839,10 +839,10 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
 
             # 총 손실 계산 및 역전파
-            weight_seg = torch.nn.Parameter(torch.tensor(0.5))
-            weight_depth = torch.nn.Parameter(torch.tensor(0.5))
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
-
+        
+        print(weight_seg , weight_depth)
+        
         total_loss = seg_loss + depth_loss
         loss_value = loss.item()
         seg_loss_value = seg_loss.item()
@@ -852,16 +852,16 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
+        grad_norm = loss_scaler(loss_value, optimizer, clip_grad=max_norm,
                                 parameters=model.parameters(), create_graph=is_second_order)
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
         torch.cuda.synchronize()
-
+    
         # Metrics and logging
-        metric_logger.update(total_loss=total_loss_value)
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(norm_loss=loss_value)
+        metric_logger.update(loss=total_loss_value)
         metric_logger.update(seg_loss=seg_loss_value)
         metric_logger.update(depth_loss=depth_loss_value)
 
@@ -884,8 +884,8 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
 
         if log_writer is not None:
             log_writer.update(
-                {
-                    'total_loss': loss_value,
+                {   
+                    'total_loss': total_loss_value,
                     'lr': max_lr,
                     'weight_decay': weight_decay_value,
                     'grad_norm': grad_norm,
