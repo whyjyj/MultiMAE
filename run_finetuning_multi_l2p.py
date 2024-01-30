@@ -241,9 +241,9 @@ def get_args():
                         help='epochs to warmup LR, if scheduler supports')
 
     # Augmentation parameters
-    parser.add_argument('--aug_name', type=str, default='simple',
-                        choices=['simple'],
-                        help='One of [simple] (default: simple)')
+    parser.add_argument('--aug_name', type=str, default='nyu_transform',
+                        choices=['simple','nyu_transform'],
+                        help='One of [nyu_transform] (default: nyu_transform)')
     parser.add_argument('--color_augs', default=False, action='store_true')
     parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
     # Finetuning parameters
@@ -396,6 +396,9 @@ def main(args):
     if args.aug_name == 'simple':
         train_transform = simple_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
         val_transform = simple_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
+    elif args.aug_name == 'nyu_transform':
+        train_transform = nyu_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
+        val_transform = nyu_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
     else:
         raise ValueError(f"Invalid aug: {args.aug_name}")
 
@@ -837,6 +840,9 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             depth_loss = 0
             if 'depth' in tasks_dict:
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
+           
+            weight_seg = model.weight_seg
+            weight_depth = model.weight_depth
 
             # 총 손실 계산 및 역전파
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
