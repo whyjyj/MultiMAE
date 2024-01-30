@@ -397,7 +397,7 @@ def main(args):
         train_transform = simple_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
         val_transform = simple_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
     elif args.aug_name == 'nyu_transform':
-        train_transform = nyu_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
+        train_transform = nyu_transform(train=True, additional_targets=additional_targets, input_size=args.input_size,color_aug = args.color_augs)
         val_transform = nyu_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
     else:
         raise ValueError(f"Invalid aug: {args.aug_name}")
@@ -1222,8 +1222,8 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}=-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:

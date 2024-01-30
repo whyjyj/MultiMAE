@@ -17,18 +17,18 @@ decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 200
+epochs: 500
 opt: adamw
-lr: 0.00006 # = 1e-4
-warmup_lr: 0.0000006 # = 1e-6
+lr: 0.00002 # = 1e-4
+warmup_lr: 0.0000002 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
-batch_size: 5
-input_size: 640
-layer_decay: 0.75
+batch_size: 2
+input_size: 608
+layer_decay: 0.1
 
 # Augmentation
-aug_name: simple
+aug_name: nyu_transform
 
 # Data info
 data_path: "/content/drive/MyDrive/NYUv2/train"
@@ -37,7 +37,7 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 200
+eval_freq: 500
 
 # Misc.
 find_unused_params: False
@@ -49,7 +49,7 @@ prompt_shallow : False
 prompt_deep : True
 top_k : 5
 size : 10
-length : 5
+length : 25
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
