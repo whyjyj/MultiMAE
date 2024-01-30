@@ -674,6 +674,7 @@ def main(args):
             log_images=log_images,prompt_shallow =args.prompt_shallow , prompt_deep = args.prompt_deep,
             prompt_pool = args.prompt_pool, pool_size = args.size , prompt_length=  args.length ,top_k = args.top_k
         )
+        print('weight_seg : ' , model.weight_seg.item() , "weight_depth : ", model.weight_depth.item())
         
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
@@ -847,8 +848,6 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             # 총 손실 계산 및 역전파
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
         
-        print(weight_seg , weight_depth)
-        
         total_loss = seg_loss + depth_loss
         loss_value = loss.item()
         seg_loss_value = seg_loss.item()
@@ -858,7 +857,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        grad_norm = loss_scaler(loss_value, optimizer, clip_grad=max_norm,
+        grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
                                 parameters=model.parameters(), create_graph=is_second_order)
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
@@ -1223,7 +1222,7 @@ if __name__ == '__main__':
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
         opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
-        opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+        opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-aug={opts.aug_name}'
 
     # Create output directory if it doesn't exist
     if opts.output_dir:
