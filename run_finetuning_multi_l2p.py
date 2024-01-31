@@ -560,13 +560,13 @@ def main(args):
                 p.requires_grad = False
 
         for name, param in model.named_parameters():
-            if 'output_adapters' in name:
+            if any(substr in name for substr in ['output_adapters', 'bias', 'input_adapters']):
                 param.requires_grad = True
 
     # check frozen well 
-    # for n,p in model.named_parameters():
-    #     if p.requires_grad:
-    #       print('Unfrozen :' , n)
+    for n,p in model.named_parameters():
+        if p.requires_grad:
+          print('Unfrozen :' , n)
           
     model.to(device)
 
@@ -674,7 +674,13 @@ def main(args):
             log_images=log_images,prompt_shallow =args.prompt_shallow , prompt_deep = args.prompt_deep,
             prompt_pool = args.prompt_pool, pool_size = args.size , prompt_length=  args.length ,top_k = args.top_k
         )
-        print('weight_seg : ' , model.weight_seg.item() , "weight_depth : ", model.weight_depth.item())
+        
+        raw_parameter_seg = model.raw_parameter_seg
+        raw_parameter_depth = model.raw_parameter_depth
+        weight_seg = torch.exp(raw_parameter_seg)
+        weight_depth =torch.exp(raw_parameter_depth)
+
+        print('weight_seg : ' , weight_seg.item() , "weight_depth : ", weight_depth.item())
         
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
