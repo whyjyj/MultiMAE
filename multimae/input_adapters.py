@@ -203,6 +203,7 @@ class PromptPatchedInputAdapter(nn.Module):
         else:
             self.pos_emb = nn.Parameter(torch.zeros(1, self.dim_tokens, h_posemb, w_posemb))
             trunc_normal_(self.pos_emb, std=0.02)
+            
         #prompt 
         if prompt_pool :
             self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
@@ -243,7 +244,7 @@ class PromptPatchedInputAdapter(nn.Module):
 
         if self.prompt_pool :
             x = self.prompt(x)
-            return x['prompted_embedding']  
+            return x['prompted_embedding']  , self.prompt
         
 class SemSegInputAdapter(nn.Module):
     """
