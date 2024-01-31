@@ -842,9 +842,11 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             if 'depth' in tasks_dict:
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
-            weight_seg = model.weight_seg
-            weight_depth = model.weight_depth
-
+            raw_parameter_seg = model.raw_parameter_seg
+            raw_parameter_depth = model.raw_parameter_depth
+            weight_seg = torch.exp(raw_parameter_seg)
+            weight_depth =torch.exp(raw_parameter_depth)
+            
             # 총 손실 계산 및 역전파
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
         
@@ -906,13 +908,20 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
     return {'[Epoch] ' + k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
-    # 가중치의 합이 1이 되도록 정규화
-    total_weight = weight_seg + weight_depth
-    normalized_weight_seg = weight_seg / total_weight
-    normalized_weight_depth = weight_depth / total_weight
+    # σ1과 σ2에 대한 분산의 역수를 계산합니다.
+    inv_var_depth = 1 / (weight_depth ** 2)
+    inv_var_seg = 1 / (weight_seg ** 2)
 
-    # 가중치를 적용한 총 손실 계산
-    total_loss = normalized_weight_seg * seg_loss + normalized_weight_depth * depth_loss
+    # 각 손실에 대한 가중치를 적용합니다.
+    weighted_depth_loss = 0.5 * inv_var_depth * depth_loss
+    weighted_seg_loss = inv_var_seg * seg_loss
+
+    # 로그 항을 계산합니다.
+    log_term = torch.log(weight_depth) + torch.log(weight_seg)
+
+    # 최종 손실을 계산합니다.
+    total_loss = weighted_depth_loss + weighted_seg_loss + log_term
+
     return total_loss
 
 @torch.no_grad()
