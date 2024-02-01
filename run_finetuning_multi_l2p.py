@@ -676,11 +676,9 @@ def main(args):
         )
         
         raw_parameter_seg = model.raw_parameter_seg
-        raw_parameter_depth = model.raw_parameter_depth
         weight_seg = torch.exp(raw_parameter_seg)
-        weight_depth =torch.exp(raw_parameter_depth)
 
-        print('weight_seg : ' , weight_seg.item() , "weight_depth : ", weight_depth.item())
+        print('weight_seg : ' , weight_seg.item() , "weight_depth : ", 1 - weight_seg.item())
         
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
@@ -849,9 +847,8 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
             raw_parameter_seg = model.raw_parameter_seg
-            raw_parameter_depth = model.raw_parameter_depth
             weight_seg = torch.exp(raw_parameter_seg)
-            weight_depth =torch.exp(raw_parameter_depth)
+            weight_depth = 1- weight_seg
             
             # 총 손실 계산 및 역전파
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
@@ -914,7 +911,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
     return {'[Epoch] ' + k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
-    # σ1과 σ2에 대한 분산의 역수를 계산합니다.
+    # σ1과 σ2에 대한 역수를 계산합니다.
     inv_var_depth = 1 / (weight_depth ** 2)
     inv_var_seg = 1 / (weight_seg ** 2)
 

@@ -19,16 +19,16 @@ decoder_depth: 4
 # Train
 epochs: 500
 opt: adamw
-lr: 0.00002 # = 1e-4
-warmup_lr: 0.0000002 # = 1e-6
+lr: 0.0002 # = 1e-4
+warmup_lr: 0.000002 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
-batch_size: 2
-input_size: 608
+batch_size: 14
+input_size: 320
 layer_decay: 0.1
 
 # Augmentation
-aug_name: nyu_transform
+aug_name: simple
 
 # Data info
 data_path: "/content/drive/MyDrive/NYUv2/train"
@@ -49,7 +49,7 @@ prompt_shallow : False
 prompt_deep : True
 top_k : 5
 size : 10
-length : 25
+length : 5
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases

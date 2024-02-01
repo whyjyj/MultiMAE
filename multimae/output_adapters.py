@@ -502,11 +502,14 @@ class ConvNeXtAdapter(nn.Module):
             main_tasks: Iterable[str] = ('rgb',),
             patch_size: int = 16,
             depth: int = 4,
+            dim_tokens_enc : int = 768,
             interpolate_mode: str = 'bilinear',
+            
             **kwargs,
     ):
         super().__init__()
-        
+
+        self.dim_tokens_enc = dim_tokens_enc
         self.prompt_pool = prompt_pool
         self.prompt_deep = prompt_deep
         self.main_tasks = main_tasks
@@ -517,14 +520,24 @@ class ConvNeXtAdapter(nn.Module):
         self.num_classes = int(num_classes)
         self.interpolate_mode = interpolate_mode
 
+        #For attention (prompt pool + task specific prompt)
+        self.query_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.key_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        
+        self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+
+        #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim)
             for _ in range(depth)
         ])
+
         self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
         self.apply(self._init_weights)
 
-    def init(self, dim_tokens_enc: int = 768 ):
+    def init(self, task_specific_prompt_length : int = 25, dim_tokens_enc: int = 768 
+          ,in_size : int = 425 , out_size : int = 400):
         """
         Initialize parts of decoder that are dependent on dimension of encoder tokens.
         Should be called when setting up MultiMAE.
@@ -533,9 +546,15 @@ class ConvNeXtAdapter(nn.Module):
         """
         self.in_channels = dim_tokens_enc * len(self.main_tasks)
 
+        self.global_pooling = nn.Conv1d(in_channels = in_size + task_specific_prompt_length,
+         out_channels = out_size, kernel_size = 1 )
+   
         # Projection of encoder tokens to the patch dimension
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
         self._init_weights(self.proj_dec)
+        # Task specific prompts
+        self.task_specific_prompts = nn.Parameter(torch.zeros(1,task_specific_prompt_length
+        ,dim_tokens_enc))
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -559,16 +578,35 @@ class ConvNeXtAdapter(nn.Module):
         return x
 
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
+
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
         x = self.adapt_tokens(encoder_tokens, input_info)
-        
-        total_tokens = x.shape[1]
-        desired_tokens = N_H * N_W
-        tokens_to_use = total_tokens - desired_tokens 
-        x = x[:, tokens_to_use:, :]
 
+        # [2, task_specific_prompt_length, dim_tokens_enc]
+        total_prompts = x.shape[1] - N_H * N_W
+        from_pool = x[:,:total_prompts,:]
+
+        expanded_prompts = self.task_specific_prompts.expand(x.size(0), -1, -1)
+        #attention for task specific prompts
+        query = self.query_projection(expanded_prompts)
+        key = self.key_projection(from_pool)
+        value = self.value_projection(from_pool)
+
+        scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+        attn = F.softmax(scores, dim=-1)
+        context = torch.matmul(attn, value)
+        
+        expanded_prompts = self.out_projection(context)
+
+        final_prompts = expanded_prompts
+
+        # 두 텐서를 연결
+        x = torch.cat([final_prompts, x], dim=1)
+        # For Global Pooling (prompt+patch)
+        x = self.global_pooling (x)
+       
         x = self.proj_dec(x)
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
