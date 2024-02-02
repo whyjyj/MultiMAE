@@ -848,7 +848,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
             raw_parameter_seg = model.raw_parameter_seg
-            #for weight 0~1
+            #for weight 0~1!
             weight_seg = torch.sigmoid(raw_parameter_seg)
             weight_depth = 1- weight_seg
             
