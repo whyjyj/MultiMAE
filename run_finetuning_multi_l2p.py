@@ -676,7 +676,7 @@ def main(args):
         )
         
         raw_parameter_seg = model.raw_parameter_seg
-        weight_seg = torch.exp(raw_parameter_seg)
+        weight_seg = torch.sigmoid(raw_parameter_seg)
 
         print('weight_seg : ' , weight_seg.item() , "weight_depth : ", 1 - weight_seg.item())
         
@@ -847,7 +847,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
             raw_parameter_seg = model.raw_parameter_seg
-            weight_seg = torch.exp(raw_parameter_seg)
+            weight_seg = torch.sigmoid(raw_parameter_seg)
             weight_depth = 1- weight_seg
             
             # 총 손실 계산 및 역전파
