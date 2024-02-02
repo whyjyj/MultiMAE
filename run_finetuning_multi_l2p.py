@@ -49,6 +49,7 @@ from utils.log_images import log_semseg_wandb, log_taskonomy_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
+#for test new git 
 
 def masked_mse_loss(preds, target, mask_valid=None):
     if mask_valid is None:
