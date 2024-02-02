@@ -558,7 +558,7 @@ def main(args):
         for n, p in model.named_parameters():
             if n.startswith('encoder'):
                 p.requires_grad = False
-
+                
         for name, param in model.named_parameters():
             if any(substr in name for substr in ['output_adapters', 'bias', 'input_adapters']):
                 param.requires_grad = True
