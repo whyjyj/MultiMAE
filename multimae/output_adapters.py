@@ -526,7 +526,10 @@ class ConvNeXtAdapter(nn.Module):
         self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
         
         self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-
+        
+        self.weight_final_prompts = nn.Parameter(torch.tensor(0.5))
+        self.weight_task_specific_prompts = nn.Parameter(torch.tensor(0.5))
+        
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim)
@@ -546,12 +549,13 @@ class ConvNeXtAdapter(nn.Module):
         """
         self.in_channels = dim_tokens_enc * len(self.main_tasks)
 
-        self.global_pooling = nn.Conv1d(in_channels = in_size + task_specific_prompt_length,
-         out_channels = out_size, kernel_size = 1 )
+        self.global_pooling = nn.Conv1d(in_channels = in_size - task_specific_prompt_length,
+         out_channels = out_size - task_specific_prompt_length , kernel_size = 1 ) # 400 -> 3756 input vector 변환
    
         # Projection of encoder tokens to the patch dimension
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
         self._init_weights(self.proj_dec)
+        
         # Task specific prompts
         self.task_specific_prompts = nn.Parameter(torch.zeros(1,task_specific_prompt_length
         ,dim_tokens_enc))
@@ -598,16 +602,23 @@ class ConvNeXtAdapter(nn.Module):
         attn = F.softmax(scores, dim=-1)
         context = torch.matmul(attn, value)
         
-        expanded_prompts = self.out_projection(context)
-
-        final_prompts = expanded_prompts
-
-        # 두 텐서를 연결
+        final_prompts = self.out_projection(context) # B x promt_length(25) x 768
+        
+        self.task_specific_prompts = nn.Parameter(final_prompts * self.weight_final_prompts + self.task_specific_prompts * self.weight_task_specific_prompts)
+        
+        # # 두 텐서를 연결
+        # x = torch.cat([final_prompts, x], dim=1)
+        
+        # # For Global Pooling (prompt+patch)
+        # x = self.global_pooling (x)
+        
+        x = self.global_pooling(x) #400 -> 375 
         x = torch.cat([final_prompts, x], dim=1)
-        # For Global Pooling (prompt+patch)
-        x = self.global_pooling (x)
+        
+        # x = x[:,total_prompts:,:]
        
         x = self.proj_dec(x)
+        
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
                       nh=N_H, nw=N_W,

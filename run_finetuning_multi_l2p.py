@@ -677,9 +677,13 @@ def main(args):
         )
         
         raw_parameter_seg = model.raw_parameter_seg
-        weight_seg = torch.sigmoid(raw_parameter_seg)
+        raw_parameter_depth = model.raw_parameter_depth
+        weight_final_prompts = model.weight_final_prompts
+        weight_task_specific_prompts = model.weight_task_specific_prompts
+        
 
-        print('weight_seg : ' , weight_seg.item() , "weight_depth : ", 1 - weight_seg.item())
+        print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
+        print('weight_attention_prompts : ',weight_final_prompts.item() , "weight_task_specific_prompts : " , weight_task_specific_prompts.item())
         
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
@@ -848,9 +852,10 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
             raw_parameter_seg = model.raw_parameter_seg
+            raw_parameter_depth = model.raw_parameter_depth
             #for weight 0~1!
-            weight_seg = torch.sigmoid(raw_parameter_seg)
-            weight_depth = 1- weight_seg
+            weight_seg = raw_parameter_seg
+            weight_depth = raw_parameter_depth
             
             # 총 손실 계산 및 역전파
             loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
@@ -914,15 +919,16 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
 
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
     # σ1과 σ2에 대한 역수를 계산합니다.
-    inv_var_depth = 1 / (weight_depth ** 2)
-    inv_var_seg = 1 / (weight_seg ** 2)
+    eps = 1e-6
+    inv_var_depth = 1 / (weight_depth ** 2 +eps)
+    inv_var_seg = 1 / (weight_seg ** 2 + eps)
 
     # 각 손실에 대한 가중치를 적용합니다.
-    weighted_depth_loss = 0.5 * inv_var_depth * depth_loss
+    weighted_depth_loss = inv_var_depth * depth_loss
     weighted_seg_loss = inv_var_seg * seg_loss
 
     # 로그 항을 계산합니다.
-    log_term = torch.log(weight_depth) + torch.log(weight_seg)
+    log_term = torch.log(weight_depth**2 + eps) + torch.log(weight_seg**2 + eps)
 
     # 최종 손실을 계산합니다.
     total_loss = weighted_depth_loss + weighted_seg_loss + log_term
