@@ -87,8 +87,8 @@ class MultiMAE(nn.Module):
         self.prompt_pool = prompt_pool
         
         #learnable weight
-        self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(0.0))
-        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.0))
+        self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(0.01))
+        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.01))
         
         # Initialize input and output adapters
         for adapter in input_adapters.values():
