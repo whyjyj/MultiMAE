@@ -88,7 +88,8 @@ class MultiMAE(nn.Module):
         
         #learnable weight
         self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(0.0))
-  
+        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.0))
+        
         # Initialize input and output adapters
         for adapter in input_adapters.values():
             adapter.init(dim_tokens=dim_tokens,

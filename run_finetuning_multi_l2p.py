@@ -43,7 +43,7 @@ from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from multimae import prompt
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES, NYU_MEAN, NYU_STD
-from utils.datasets_semseg import build_semseg_dataset, simple_transform
+from utils.datasets_semseg import build_semseg_dataset, simple_transform , jake_transform
 from utils.dataset_regression import build_regression_dataset, nyu_transform
 from utils.log_images import log_semseg_wandb, log_taskonomy_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
@@ -242,8 +242,8 @@ def get_args():
                         help='epochs to warmup LR, if scheduler supports')
 
     # Augmentation parameters
-    parser.add_argument('--aug_name', type=str, default='nyu_transform',
-                        choices=['simple','nyu_transform'],
+    parser.add_argument('--aug_name', type=str, default='jake',
+                        choices=['simple','nyu_transform','jake'],
                         help='One of [nyu_transform] (default: nyu_transform)')
     parser.add_argument('--color_augs', default=False, action='store_true')
     parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
@@ -400,6 +400,9 @@ def main(args):
     elif args.aug_name == 'nyu_transform':
         train_transform = nyu_transform(train=True, additional_targets=additional_targets, input_size=args.input_size,color_aug = args.color_augs)
         val_transform = nyu_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
+    elif args.aug_name == 'jake':
+        train_transform = jake_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
+        val_transform = jake_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
     else:
         raise ValueError(f"Invalid aug: {args.aug_name}")
 
@@ -678,13 +681,9 @@ def main(args):
         
         raw_parameter_seg = model.raw_parameter_seg
         raw_parameter_depth = model.raw_parameter_depth
-        weight_final_prompts = model.weight_final_prompts
-        weight_task_specific_prompts = model.weight_task_specific_prompts
-        
 
         print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
-        print('weight_attention_prompts : ',weight_final_prompts.item() , "weight_task_specific_prompts : " , weight_task_specific_prompts.item())
-        
+
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(

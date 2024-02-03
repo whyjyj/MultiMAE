@@ -612,6 +612,7 @@ class ConvNeXtAdapter(nn.Module):
         # # For Global Pooling (prompt+patch)
         # x = self.global_pooling (x)
         
+        x = x[:,total_prompts:,:]
         x = self.global_pooling(x) #400 -> 375 
         x = torch.cat([final_prompts, x], dim=1)
         

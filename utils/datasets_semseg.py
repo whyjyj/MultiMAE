@@ -81,6 +81,50 @@ def simple_transform(train: bool,
     return transform
 
 
+def jake_transform(train: bool,
+                     additional_targets: Dict[str, str],
+                     input_size: int = 512,
+                     pad_value: Tuple[int, int, int] = (128, 128, 128),
+                     pad_mask_value: int = PAD_MASK_VALUE):
+    """Customized transform for semantic segmentation, applied on all modalities
+
+    During training:
+        1. Random horizontal flip
+        2. Random scale between 0.5 to 2
+        3. Random rotate between -10 to 10 degrees
+        4. Crop the image to a fixed size with zero padding if needed
+        5. Normalization with ImageNet mean and std dev
+
+    During validation / test:
+        1. Padding
+        2. Normalization with ImageNet mean and std dev
+    """
+
+    if train:
+        transform = A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.RandomScale(scale_limit=(0.5, 2.0), p=1.0),
+            A.Rotate(limit=(-10, 10), p=1.0),
+            A.PadIfNeeded(min_height=input_size, min_width=input_size,
+                          border_mode=cv2.BORDER_CONSTANT,
+                          value=pad_value, mask_value=pad_mask_value, p=1.0),
+            A.RandomCrop(height=input_size, width=input_size, p=1.0),
+            A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+            ToTensorV2(),
+        ], additional_targets=additional_targets)
+
+    else:
+        transform = A.Compose([
+            A.LongestMaxSize(max_size=input_size, p=1),
+            A.PadIfNeeded(min_height=input_size, min_width=input_size,
+                          border_mode=cv2.BORDER_CONSTANT,
+                          value=pad_value, mask_value=pad_mask_value, p=1.0),
+            A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+            ToTensorV2(),
+        ], additional_targets=additional_targets)
+
+    return transform
+
 class DataAugmentationForSemSeg(object):
     """Data transform / augmentation for semantic segmentation downstream tasks.
     """
