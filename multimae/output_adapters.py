@@ -526,10 +526,7 @@ class ConvNeXtAdapter(nn.Module):
         self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
         
         self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        
-        self.weight_final_prompts = nn.Parameter(torch.tensor(0.5))
-        self.weight_task_specific_prompts = nn.Parameter(torch.tensor(0.5))
-        
+
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim)
@@ -539,8 +536,8 @@ class ConvNeXtAdapter(nn.Module):
         self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
         self.apply(self._init_weights)
 
-    def init(self, task_specific_prompt_length : int = 25, dim_tokens_enc: int = 768 
-          ,in_size : int = 425 , out_size : int = 400):
+    def init(self, task_specific_prompt_length : int = 100, dim_tokens_enc: int = 768 
+          ,in_size : int = 500 , out_size : int = 400):
         """
         Initialize parts of decoder that are dependent on dimension of encoder tokens.
         Should be called when setting up MultiMAE.
@@ -550,7 +547,7 @@ class ConvNeXtAdapter(nn.Module):
         self.in_channels = dim_tokens_enc * len(self.main_tasks)
 
         self.global_pooling = nn.Conv1d(in_channels = in_size - task_specific_prompt_length,
-         out_channels = out_size - task_specific_prompt_length , kernel_size = 1 ) # 400 -> 3756 input vector 변환
+         out_channels = out_size - task_specific_prompt_length , kernel_size = 1 ) # 400 -> 375 input vector 변환
    
         # Projection of encoder tokens to the patch dimension
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
@@ -591,7 +588,6 @@ class ConvNeXtAdapter(nn.Module):
         # [2, task_specific_prompt_length, dim_tokens_enc]
         total_prompts = x.shape[1] - N_H * N_W
         from_pool = x[:,:total_prompts,:]
-
         expanded_prompts = self.task_specific_prompts.expand(x.size(0), -1, -1)
         #attention for task specific prompts
         query = self.query_projection(expanded_prompts)
@@ -603,9 +599,7 @@ class ConvNeXtAdapter(nn.Module):
         context = torch.matmul(attn, value)
         
         final_prompts = self.out_projection(context) # B x promt_length(25) x 768
-        
-        self.task_specific_prompts = nn.Parameter(final_prompts * self.weight_final_prompts + self.task_specific_prompts * self.weight_task_specific_prompts)
-        
+
         # # 두 텐서를 연결
         # x = torch.cat([final_prompts, x], dim=1)
         
@@ -630,9 +624,8 @@ class ConvNeXtAdapter(nn.Module):
         
         # Interpolate to semseg res
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode)
-
+        
         return x
-
 
 class DPTOutputAdapter(nn.Module):
     """DPT output adapter.

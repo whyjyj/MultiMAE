@@ -439,7 +439,7 @@ def main(args):
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
-            drop_last=False
+            drop_last=True
         )
     else:
         data_loader_val = None
@@ -690,7 +690,7 @@ def main(args):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, extra_info="l2p")
 
-        if data_loader_val is not None and (epoch == args.epochs - 1):
+        if epoch % args.eval_freq == 0 or epoch == args.epochs - 1:
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
 
             seg_val_stats = evaluate_seg(model=model, criterion=criterion, data_loader=data_loader_val,
@@ -703,21 +703,15 @@ def main(args):
                                             device=device, epoch=epoch, in_domains=args.in_domains, log_images=log_images,
                                             mode='val', return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
 
-            if max_miou < seg_val_stats["mean_iou"]:
+            if max_miou < seg_val_stats["mean_iou"] and min_val_loss > depth_val_stats["loss"]:
                 max_miou = seg_val_stats["mean_iou"]
-                if args.output_dir and args.save_ckpt:
-                    utils.save_model(
-                        args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                        loss_scaler=loss_scaler, epoch="best")
-                print(f'Max mIoU: {max_miou:.3f}')
-
-            if min_val_loss > depth_val_stats["loss"]:
                 min_val_loss = depth_val_stats["loss"]
                 if args.output_dir and args.save_ckpt:
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                         loss_scaler=loss_scaler, epoch="best")
-                print(f'New best val loss: {min_val_loss:.3f}')
+                print(f'Max mIoU: {max_miou:.3f}')
+                print(f'New best depth val loss: {min_val_loss:.3f}')
 
             log_stats = {**{f'train/{k}': v for k, v in train_stats.items()},
                         **{f'val_seg/{k}': v for k, v in seg_val_stats.items()},
