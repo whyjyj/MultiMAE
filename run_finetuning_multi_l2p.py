@@ -682,8 +682,14 @@ def main(args):
         raw_parameter_seg = model.raw_parameter_seg
         raw_parameter_depth = model.raw_parameter_depth
 
+        print("=============================================")
         print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
-
+        
+        print('prompt_mean : ', model.prompt.prompt.mean().item())
+        print('seg_prompt_mean : ', model.output_adapters.semseg.task_specific_prompts.mean().item())
+        print('depth_prompt_mean : ', model.output_adapters.depth.task_specific_prompts.mean().item())
+        print("=============================================")
+        
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(

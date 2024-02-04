@@ -19,16 +19,16 @@ decoder_depth: 4
 # Train
 epochs: 2000
 opt: adamw
-lr: 0.0002 # = 1e-4
-warmup_lr: 0.000002 # = 1e-6
+lr: 0.0004 # = 1e-4
+warmup_lr: 0.000004 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
-batch_size: 14
-input_size: 320
+batch_size: 22
+input_size: 256
 layer_decay: 0.1
 
 # Augmentation
-aug_name: jake
+aug_name: simple
 
 # Data info
 data_path: "/content/drive/MyDrive/NYUv2/train"
@@ -47,8 +47,8 @@ prompt_mode : deep
 prompt_pool : True
 prompt_shallow : False
 prompt_deep : True
-top_k : 5
-size : 10
+top_k : 10
+size : 20
 length : 5
 
 # Wandb and logging
