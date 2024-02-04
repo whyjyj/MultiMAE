@@ -203,11 +203,6 @@ class PromptPatchedInputAdapter(nn.Module):
         else:
             self.pos_emb = nn.Parameter(torch.zeros(1, self.dim_tokens, h_posemb, w_posemb))
             trunc_normal_(self.pos_emb, std=0.02)
-            
-        #prompt 
-        if prompt_pool :
-            self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
-                                 top_k=self.top_k, pool_size=self.pool_size)
 
         # Image -> tokens projection
         self.proj = nn.Conv2d(
@@ -242,10 +237,8 @@ class PromptPatchedInputAdapter(nn.Module):
         # Add patches and positional embeddings
         x = x_patch + x_pos_emb
 
-        if self.prompt_pool :
-            x = self.prompt(x)
-            return x['prompted_embedding']  , self.prompt
-        
+        return x
+    
 class SemSegInputAdapter(nn.Module):
     """
     Adapter for spatial inputs, like images or feature maps.

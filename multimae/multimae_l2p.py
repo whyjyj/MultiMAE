@@ -85,7 +85,12 @@ class MultiMAE(nn.Module):
         self.pool_size = pool_size
         self.top_k = top_k
         self.prompt_pool = prompt_pool
-        
+        self.dim_tokens = dim_tokens
+
+        #prompts
+        self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
+                                 top_k=self.top_k, pool_size=self.pool_size)
+
         #learnable weight
         self.raw_parameter_seg = torch.nn.Parameter(torch.empty(1))
         self.raw_parameter_depth = torch.nn.Parameter(torch.empty(1))
@@ -477,17 +482,10 @@ class MultiViT(MultiMAE):
             if domain in self.input_adapters
         }
 
-        input_task_tokens , prompt = input_task_tokens['rgb']
-        input_task_tokens = {'rgb' : input_task_tokens}
-    
         input_info = self.generate_input_info(input_task_tokens, image_size=(H, W))
         input_tokens = torch.cat([task_tokens for task_tokens in input_task_tokens.values()], dim=1)
 
-        # Add global tokens to input tokens
-        global_tokens = repeat(self.global_tokens, '() n d -> b n d', b=B)
-        input_tokens = torch.cat([input_tokens, global_tokens], dim=1)
-
-        return input_tokens, input_info , prompt
+        return input_tokens, input_info 
 
     def forward(self, x: Union[Dict[str, torch.Tensor], torch.Tensor], return_all_layers=False, **kwargs):
         """
@@ -497,16 +495,21 @@ class MultiViT(MultiMAE):
         :param return_all_layers: Set to True to return all transformer layers
         """
 
-        input_tokens, input_info ,prompt = self.process_input(x)
+        input_tokens, input_info  = self.process_input(x)
         
-        prompt_input_size = self.top_k * self.prompt_length
-        
+        prompt_input_size = self.top_k * self.prompt_length 
+
         if self.prompt_deep:
-            for i, layer in enumerate(self.encoder):  
-                  input_tokens = input_tokens[:, prompt_input_size:, :] 
-                  prompt_output = prompt(input_tokens)
-                  input_tokens = prompt_output['prompted_embedding']
-                  input_tokens = layer(input_tokens)
+           
+            for i, layer in enumerate(self.encoder):
+              if i==0 :
+                prompt_output = self.prompt(input_tokens)
+                input_tokens = prompt_output['prompted_embedding']  
+              else:
+                input_tokens = input_tokens[:, prompt_input_size:, :] 
+                prompt_output = self.prompt(input_tokens)
+                input_tokens = prompt_output['prompted_embedding']
+                input_tokens = layer(input_tokens)
   
         else:
             input_tokens = self.encoder(input_tokens)
