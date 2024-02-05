@@ -571,11 +571,8 @@ class ConvNeXtAdapter(nn.Module):
         x = []
         final_tokens = encoder_tokens[-1]
         for task in self.main_tasks:
-            start_idx = input_info['tasks'][task]['start_idx']
-            end_idx = input_info['tasks'][task]['end_idx']
-            x.append(final_tokens[:, start_idx:end_idx,:])
-
-        x = torch.cat(x, dim=-1)
+            print(final_tokens.shape)
+            x.append(final_tokens)
         return x
 
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):

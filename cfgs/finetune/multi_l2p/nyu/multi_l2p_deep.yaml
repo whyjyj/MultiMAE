@@ -32,7 +32,7 @@ aug_name: simple
 
 # Data info
 data_path: "/content/drive/MyDrive/NYUv2/train"
-eval_data_path: "/content/drive/MyDrive/NYUv2/test"# Change me
+eval_data_path: "/content/drive/MyDrive/NYUv2/test" # Change me
 num_classes: 40
 dataset_name: nyu
 dist_eval: True

@@ -56,6 +56,7 @@ def simple_transform(train: bool,
         transform = A.Compose([
             A.HorizontalFlip(p=0.5),
             A.LongestMaxSize(max_size=input_size, p=1),
+            A.Resize(height=input_size, width=input_size, p=1),
             A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.5),  # Color jittering from MoCo-v3 / DINO
             A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=1),  # This is LSJ (0.1, 2.0)
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
@@ -70,6 +71,7 @@ def simple_transform(train: bool,
     else:
         transform = A.Compose([
             A.LongestMaxSize(max_size=input_size, p=1),
+            A.Resize(height=input_size, width=input_size, p=1),
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
                           border_mode=cv2.BORDER_CONSTANT,
