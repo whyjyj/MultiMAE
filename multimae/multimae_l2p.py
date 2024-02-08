@@ -114,12 +114,6 @@ class MultiMAE(nn.Module):
                     for _ in range(depth)  # 각 레이어에 대응하는 프롬프트 풀 초기화
                 ])
 
-        #learnable weight
-        self.raw_parameter_seg = torch.nn.Parameter(torch.empty(1))
-        self.raw_parameter_depth = torch.nn.Parameter(torch.empty(1))
-        torch.nn.init.uniform_(self.raw_parameter_seg, a=0.2, b=1.0)
-        torch.nn.init.uniform_(self.raw_parameter_depth, a=0.2, b=1.0)
-
         # Initialize input and output adapters
         for adapter in input_adapters.values():
             adapter.init(dim_tokens=dim_tokens,

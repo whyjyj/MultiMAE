@@ -19,12 +19,12 @@ decoder_depth: 4
 # Train
 epochs: 1000
 opt: adamw
-lr: 0.000075 # = 1e-4
-warmup_lr: 0.00000075 # = 1e-6
+lr: 0.00001 # = 1e-4
+warmup_lr: 0.0000001 # = 1e-6
 min_lr: 0.0000001
 warmup_epochs: 15
-batch_size: 4
-input_size: 608
+batch_size: 8
+input_size: 480
 layer_decay: 0.9
 
 # Augmentation
@@ -53,7 +53,7 @@ length : 20
 task_specific_prompt_length : 100
 
 # Wandb and logging
-log_wandb: False # Set to True to log to Weights & Biases
+log_wandb: True # Set to True to log to Weights & Biases
 wandb_project:  'multimae-multi-l2p-deep'
 wandb_entity: null # Change if needed
 wandb_run_name: 'Pool_default_deep_with_task_specific_from_encoder(100)_concatted_self_attention'

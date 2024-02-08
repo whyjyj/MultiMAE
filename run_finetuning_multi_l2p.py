@@ -25,6 +25,7 @@ import warnings
 from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Union
+import pdb
 
 import numpy as np
 import torch
@@ -50,6 +51,8 @@ from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
 #for test new git 
+from utils.task_balancing import (NoWeightingStrategy,
+                                  UncertaintyWeightingStrategy)
 
 def masked_mse_loss(preds, target, mask_valid=None):
     if mask_valid is None:
@@ -190,7 +193,10 @@ def get_args():
                         help='Makes the positional embedding learnable')
     parser.add_argument('--no_learnable_pos_emb', action='store_false', dest='learnable_pos_emb')
     parser.set_defaults(learnable_pos_emb=False)
-
+    
+    parser.add_argument('--out_domains', default='depth-semseg', type=str,
+                        help='Output domain names, separated by hyphen (default: %(default)s)')
+    
     parser.add_argument('--output_adapter', type=str, default='convnext',
                         choices=['segmenter', 'convnext', 'dpt'],
                         help='One of [segmenter,  convnext, dpt] (default: convnext)')
@@ -235,7 +241,8 @@ def get_args():
                         help='lower lr bound for cyclic schedulers that hit 0 (0.0)')
     parser.add_argument('--layer_decay', type=float, default=0.75,
                         help='layer-wise lr decay from ELECTRA')
-
+    parser.add_argument('--balancer_lr_scale', type=float, default=1.0,
+                        help='Task loss balancer LR scale (if used) (default: %(default)s)')
     parser.add_argument('--warmup_epochs', type=int, default=1, metavar='N',
                         help='epochs to warmup LR, if scheduler supports')
     parser.add_argument('--warmup_steps', type=int, default=-1, metavar='N',
@@ -383,8 +390,9 @@ def main(args):
     if not args.show_user_warnings:
         warnings.filterwarnings("ignore", category=UserWarning)
 
+    
     args.in_domains = args.in_domains.split('-')
-    args.out_domains = ['semseg','depth']
+    args.out_domains = args.out_domains.split('-')
     args.all_domains = list(set(args.in_domains) | set(args.out_domains))
     if args.use_mask_valid:
         args.all_domains.append('mask_valid')
@@ -575,7 +583,11 @@ def main(args):
           print('Unfrozen :' , n)
           
     model.to(device)
-
+        
+    loss_balancer = UncertaintyWeightingStrategy(tasks=args.out_domains)
+    loss_balancer.to(device)
+    loss_balancer_without_ddp = loss_balancer
+    
     model_without_ddp = model
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -615,7 +627,7 @@ def main(args):
     skip_weight_decay_list = model.no_weight_decay()
     print("Skip weight decay list: ", skip_weight_decay_list)
 
-    optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
+    optimizer = create_optimizer(args,  {'model': model_without_ddp, 'balancer': loss_balancer_without_ddp}, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
             get_layer_scale=assigner.get_scale if assigner is not None else None)
     loss_scaler = NativeScaler(enabled=args.fp16)
@@ -677,7 +689,7 @@ def main(args):
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         
         train_stats = train_one_epoch(
-            model=model, tasks_loss_fn=tasks_loss_fn,
+            model=model, tasks_loss_fn=tasks_loss_fn, loss_balancer = loss_balancer , 
             criterion=criterion, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
@@ -687,18 +699,10 @@ def main(args):
             prompt_pool = args.prompt_pool, pool_size = args.size , prompt_length=  args.length ,top_k = args.top_k
         )
         
-        raw_parameter_seg = model.raw_parameter_seg
-        raw_parameter_depth = model.raw_parameter_depth
-
-        print("=============================================")
-        print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
-        print("=============================================")
-
-
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
-                    args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                    args=args, model=model, model_without_ddp=model_without_ddp, loss_balancer = loss_balancer_without_ddp , optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, extra_info="l2p")
 
         if epoch % args.eval_freq == 0 or epoch == args.epochs - 1:
@@ -786,7 +790,7 @@ def main(args):
 
 def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
  pool_size, prompt_shallow, prompt_deep,tasks_loss_fn: Dict[str, torch.nn.Module], criterion: torch.nn.Module, data_loader: Iterable,
-                    optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
+                    optimizer: torch.optim.Optimizer, device: torch.device, epoch: int, loss_balancer : torch.nn.Module , 
                     loss_scaler, max_norm: float = 1.0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
                     return_all_layers=False, standardize_depth=True, log_images=False):
@@ -856,6 +860,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
+            task_losses = {}
             preds = model(input_dict, prompt_pool = prompt_pool , top_k = top_k, prompt_length = prompt_length ,
                           pool_size = pool_size , prompt_deep = prompt_deep ,
             prompt_shallow = prompt_shallow ,return_all_layers=return_all_layers)
@@ -864,26 +869,21 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             if 'semseg' in tasks_dict:
                 seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
                 seg_loss = criterion(seg_pred, seg_gt)
-
+                task_losses['seg'] = seg_loss
             # 뎁스 손실 계산
             depth_loss = 0
             if 'depth' in tasks_dict:
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
-           
-            raw_parameter_seg = model.raw_parameter_seg
-            raw_parameter_depth = model.raw_parameter_depth
-            #for weight 0~1!
-            weight_seg = raw_parameter_seg
-            weight_depth = raw_parameter_depth
+                task_losses['depth'] = depth_loss
             
-            # 총 손실 계산 및 역전파
-            loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
-        
-        total_loss = seg_loss + depth_loss
-        loss_value = loss.item()
-        seg_loss_value = seg_loss.item()
-        depth_loss_value = depth_loss.item()
-        total_loss_value = total_loss.item()
+            weighted_task_losses = loss_balancer(task_losses)
+            
+            loss = sum(weighted_task_losses.values())
+            
+            
+        loss_value = sum(task_losses.values()).item()
+        task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
+        weighted_task_loss_values = {f'{task}_loss_weighted': l.item() for task, l in weighted_task_losses.items()}
 
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
@@ -892,14 +892,8 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         trainable_params = [param for param in model.parameters() if param.requires_grad]
         
         torch.autograd.set_detect_anomaly(True)
-        
-        for p in model.parameters() :
-            print(p.grad)
-            break
-        
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
                                 parameters=trainable_params, create_graph=is_second_order)
-        
         
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
@@ -907,10 +901,9 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         torch.cuda.synchronize()
     
         # Metrics and logging
-        metric_logger.update(norm_loss=loss_value)
-        metric_logger.update(loss=total_loss_value)
-        metric_logger.update(seg_loss=seg_loss_value)
-        metric_logger.update(depth_loss=depth_loss_value)
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(**task_loss_values)
+        metric_logger.update(loss_scale=loss_scale_value)
 
         if fp16:
             metric_logger.update(loss_scale=loss_scale_value)
@@ -932,38 +925,21 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         if log_writer is not None:
             log_writer.update(
                 {   
-                    'total_loss': total_loss_value,
+                    'total_loss': loss_value,
                     'lr': max_lr,
                     'weight_decay': weight_decay_value,
                     'grad_norm': grad_norm,
-                    'seg_loss': seg_loss.item(),
-                    'depth_loss': depth_loss.item()
                 }
             )
+            log_writer.update(task_loss_values)
+            log_writer.update(weighted_task_loss_values)
+            
             log_writer.set_step(epoch)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {'[Epoch] ' + k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
-    # σ1과 σ2에 대한 역수를 계산합니다.
-    eps = 1e-2
-    inv_var_depth = 1 / (weight_depth ** 2 +eps)
-    inv_var_seg = 1 / (weight_seg ** 2 + eps)
-
-    # 각 손실에 대한 가중치를 적용합니다.
-    weighted_depth_loss = inv_var_depth * depth_loss
-    weighted_seg_loss = inv_var_seg * seg_loss
-
-    # 로그 항을 계산합니다.
-    log_term = torch.log(weight_depth**2 + eps) + torch.log(weight_seg**2 + eps)
-
-    # 최종 손실을 계산합니다.
-    total_loss = weighted_depth_loss + weighted_seg_loss + log_term
-
-    return total_loss
 
 @torch.no_grad()
 def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
