@@ -70,8 +70,7 @@ class PatchedInputAdapter(nn.Module):
         if self.dim_tokens is not None:
             self.init(dim_tokens=dim_tokens)
 
-    def init(self, dim_tokens: int = 768, prompt_shallow : bool = False,
-            prompt_deep : bool = False):
+    def init(self, dim_tokens: int = 768):
         """
         Initialize parts of encoder that are dependent on dimension of tokens.
         Should be called when setting up MultiMAE.

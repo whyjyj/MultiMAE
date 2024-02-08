@@ -24,7 +24,7 @@ import torch
 from einops import rearrange, repeat
 from torch import nn
 from torch.distributions.dirichlet import Dirichlet
-
+from torch.nn import Dropout
 from utils.registry import register_model
 
 from .multimae_utils import Block, trunc_normal_
@@ -67,6 +67,7 @@ class MultiMAE(nn.Module):
                  pool_size : int , 
                  top_k : int  , 
                  prompt_pool : bool,
+                 task_specific_prompt_length : int ,
                  num_global_tokens: int = 1,
                  dim_tokens: int = 768,
                  depth: int = 12,
@@ -76,7 +77,8 @@ class MultiMAE(nn.Module):
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  drop_path_rate: float = 0.0,
-                 norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6)):
+                 prompt_dropout_rate : float = 0.0 ,
+                 norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6),**kwargs):
         super().__init__()
 
         self.prompt_shallow = prompt_shallow
@@ -86,10 +88,31 @@ class MultiMAE(nn.Module):
         self.top_k = top_k
         self.prompt_pool = prompt_pool
         self.dim_tokens = dim_tokens
-
+        self.prompt_dropout_rate = prompt_dropout_rate
+        self.task_specific_prompt_length = task_specific_prompt_length
+        self.prompt_proj = nn.Identity()
+        #prompt_dropout
+        self.prompt_dropout = Dropout(self.prompt_dropout_rate)
+        
+        self.task_specific_prompts_1 = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
+        ,self.dim_tokens))
+        
+        self.task_specific_prompts_2 = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
+        ,self.dim_tokens))
+        
         #prompts
-        self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
-                                 top_k=self.top_k, pool_size=self.pool_size)
+        # self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
+        #                          top_k=self.top_k, pool_size=self.pool_size)
+        if self.prompt_pool:
+            if self.prompt_deep:
+                self.layer_prompt_pools = nn.ModuleList([
+                    Prompt(length=prompt_length, 
+                          embed_dim=dim_tokens, 
+                          pool_size=pool_size,
+                          prompt_pool=True,
+                          top_k=top_k)
+                    for _ in range(depth)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                ])
 
         #learnable weight
         self.raw_parameter_seg = torch.nn.Parameter(torch.empty(1))
@@ -373,8 +396,7 @@ class MultiMAE(nn.Module):
 
         # Add global tokens to input tokens
         global_tokens = repeat(self.global_tokens, '() n d -> b n d', b=B)
-        input_tokens = torch.cat([input_tokens, global_tokens], dim=1)
-
+        
         encoder_tokens = self.encoder(input_tokens)
 
         ## Output decoders
@@ -498,35 +520,43 @@ class MultiViT(MultiMAE):
         input_tokens, input_info  = self.process_input(x)
         
         prompt_input_size = self.top_k * self.prompt_length 
-
+        
+        expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
+        expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
+        
+        input_tokens = torch.cat([expanded_prompts_1,expanded_prompts_2 ,  input_tokens ], dim = 1)
+        
         if self.prompt_deep:
            
+            # for i, layer in enumerate(self.encoder):
+            #   if i==0 :
+            #     prompt_output = self.prompt(input_tokens)
+            #     input_tokens = prompt_output['prompted_embedding']
+            #     input_tokens = self.prompt_dropout((input_tokens))
+            #     input_tokens = layer(input_tokens)  
+            #   else:
+            #     input_tokens = input_tokens[:, prompt_input_size:, :] 
+            #     prompt_output = self.prompt(input_tokens)
+            #     input_tokens = prompt_output['prompted_embedding']
+            #     input_tokens = self.prompt_dropout((input_tokens))
+            #     input_tokens = layer(input_tokens)
+                
             for i, layer in enumerate(self.encoder):
               if i==0 :
-                prompt_output = self.prompt(input_tokens)
-                input_tokens = prompt_output['prompted_embedding']  
-              else:
-                input_tokens = input_tokens[:, prompt_input_size:, :] 
-                prompt_output = self.prompt(input_tokens)
+                prompt_instance = self.layer_prompt_pools[i]
+                prompt_output = prompt_instance(input_tokens)
                 input_tokens = prompt_output['prompted_embedding']
+                input_tokens = self.prompt_dropout((input_tokens))
+                input_tokens = layer(input_tokens)  
+              else:
+                prompt_instance = self.layer_prompt_pools[i]
+                input_tokens = input_tokens[:, prompt_input_size:, :] 
+                prompt_output = prompt_instance(input_tokens)
+                input_tokens = prompt_output['prompted_embedding']
+                input_tokens = self.prompt_dropout((input_tokens))
                 input_tokens = layer(input_tokens)
-  
-        else:
-            input_tokens = self.encoder(input_tokens)
             
-        # Pass tokens through Transformer
-        if not return_all_layers:
-            encoder_tokens = self.encoder(input_tokens)
-        else:
-            # Optionally access every intermediate layer
-            encoder_tokens = []
-            tokens = input_tokens
-            for block in self.encoder:
-                tokens = block(tokens)
-                encoder_tokens.append(tokens)
-
-        if self.output_adapters is None:
-            return encoder_tokens
+            encoder_tokens = input_tokens
 
         # Decode tokens for each task using task-specific output adapters
         preds = {

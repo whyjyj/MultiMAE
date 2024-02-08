@@ -213,7 +213,7 @@ def get_args():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt_betas', default=[0.9, 0.999], type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip_grad', type=float, default=None, metavar='NORM',
+    parser.add_argument('--clip_grad', type=float, default= 30 , metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
@@ -249,7 +249,7 @@ def get_args():
     parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
     # Finetuning parameters
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
-    parser.add_argument('--loss', default='berhu',
+    parser.add_argument('--loss', default='l1',
                         help='Loss to use. One of [l1, l2, berhu] (default: berhu)')
 
     # Dataset parameters
@@ -271,7 +271,7 @@ def get_args():
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default=0, type=int)
+    parser.add_argument('--seed', default= 800 , type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--auto_resume', action='store_true')
     parser.add_argument('--no_auto_resume', action='store_false', dest='auto_resume')
@@ -340,10 +340,11 @@ def get_args():
     parser.add_argument('--shared_prompt_pool', default=False, type=bool)
     parser.add_argument('--shared_prompt_key', default=False, type=bool)
     parser.add_argument('--batchwise_prompt', default=True, type=bool)
-    parser.add_argument('--embedding_key', default='mean', type=str)
+    parser.add_argument('--embedding_key', default='mean_max', type=str)
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
+    parser.add_argument('--task_specific_prompt_length', default= 100, type=int)
     
     # when using prompt you should activate shallow or deep
     parser.add_argument('--prompt_mode' , default = None )
@@ -487,14 +488,14 @@ def main(args):
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
             prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length
         ),
         'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
             prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length
         )
     }
 
@@ -529,7 +530,8 @@ def main(args):
         prompt_length=args.length,
         top_k=args.top_k,
         pool_size=args.size,
-        use_prompt_mask=args.use_prompt_mask
+        use_prompt_mask=args.use_prompt_mask,
+        task_specific_prompt_length = args.task_specific_prompt_length
     )
 
     if args.finetune:
@@ -564,7 +566,7 @@ def main(args):
                 p.requires_grad = False
                 
         for name, param in model.named_parameters():
-            if any(substr in name for substr in ['output_adapters', 'bias', 'input_adapters']):
+            if any(substr in name for substr in ['output_adapters', 'bias']):
                 param.requires_grad = True
 
     # check frozen well 
@@ -633,6 +635,7 @@ def main(args):
 
     print("semseg criterion = %s" % str(criterion))
     print("depth criterion = %s" % tasks_loss_fn)
+    
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = True
     
@@ -662,7 +665,12 @@ def main(args):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_miou = 0.0
-    min_val_loss = np.inf
+    max_delta_1  = 0.0
+    
+    early_stopping_epochs = 10
+    best_loss = float('inf')
+    early_stop_counter = 0
+        
     for epoch in range(args.start_epoch, args.epochs):
         if log_writer is not None:
             log_writer.set_step(epoch)
@@ -684,12 +692,9 @@ def main(args):
 
         print("=============================================")
         print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
-        
-        print('prompt_mean : ', model.prompt.prompt.mean().item())
-        print('seg_prompt_mean : ', model.output_adapters.semseg.task_specific_prompts.mean().item())
-        print('depth_prompt_mean : ', model.output_adapters.depth.task_specific_prompts.mean().item())
         print("=============================================")
-        
+
+
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
@@ -709,16 +714,31 @@ def main(args):
                                             device=device, epoch=epoch, in_domains=args.in_domains, log_images=log_images,
                                             mode='val', return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
 
-            if max_miou < seg_val_stats["mean_iou"] and min_val_loss > depth_val_stats["loss"]:
+            if max_miou < seg_val_stats["mean_iou"] and max_delta_1 < depth_val_stats["delta_1"]:
                 max_miou = seg_val_stats["mean_iou"]
-                min_val_loss = depth_val_stats["loss"]
+                max_delta_1 = depth_val_stats["delta_1"]
+                
                 if args.output_dir and args.save_ckpt:
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                         loss_scaler=loss_scaler, epoch="best")
+                    
                 print(f'Max mIoU: {max_miou:.3f}')
-                print(f'New best depth val loss: {min_val_loss:.3f}')
+                print(f'max_delta_1: {max_delta_1:.3f}')
+                
+            valid_loss = max_miou + max_delta_1
+            
+            if valid_loss > best_loss:
+                early_stop_counter += 1
+            else:
+                best_loss = valid_loss
+                early_stop_counter = 0
 
+            # 조기 종료 조건 확인
+            if early_stop_counter >= early_stopping_epochs:
+                print("Early Stopping!")
+                break
+    
             log_stats = {**{f'train/{k}': v for k, v in train_stats.items()},
                         **{f'val_seg/{k}': v for k, v in seg_val_stats.items()},
                         **{f'val_depth/{k}': v for k, v in depth_val_stats.items()},
@@ -868,8 +888,19 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
+
+        trainable_params = [param for param in model.parameters() if param.requires_grad]
+        
+        torch.autograd.set_detect_anomaly(True)
+        
+        for p in model.parameters() :
+            print(p.grad)
+            break
+        
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
-                                parameters=model.parameters(), create_graph=is_second_order)
+                                parameters=trainable_params, create_graph=is_second_order)
+        
+        
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
@@ -918,7 +949,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
 
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
     # σ1과 σ2에 대한 역수를 계산합니다.
-    eps = 1e-6
+    eps = 1e-2
     inv_var_depth = 1 / (weight_depth ** 2 +eps)
     inv_var_seg = 1 / (weight_seg ** 2 + eps)
 
@@ -1240,7 +1271,7 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
+        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-task_prompt_lenth={opts.task_specific_prompt_length}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
         opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-aug={opts.aug_name}'
 
     # Create output directory if it doesn't exist
