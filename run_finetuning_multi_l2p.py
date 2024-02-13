@@ -184,7 +184,7 @@ def get_args():
                         help='base patch size for image-like modalities')
     parser.add_argument('--input_size', default=512, type=int,
                         help='images input size for backbone')
-    parser.add_argument('--drop_path_encoder', type=float, default=0.1, metavar='PCT',
+    parser.add_argument('--drop_path_encoder', type=float, default=0.5, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
     parser.add_argument('--learnable_pos_emb', action='store_true',
                         help='Makes the positional embedding learnable')
@@ -198,7 +198,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.5, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
@@ -350,7 +350,7 @@ def get_args():
     parser.add_argument('--prompt_mode' , default = None )
     parser.add_argument('--prompt_shallow' ,default=False, action = 'store_true')
     parser.add_argument('--prompt_deep' ,default=False, action = 'store_true')
-    
+    parser.add_argument('--not_self_attn' , default = True , type = bool  )
     # ViT parameters
     parser.add_argument('--global_pool', default='token', choices=['token', 'avg'], type=str, help='type of global pooling for final sequence')
     parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
@@ -488,15 +488,16 @@ def main(args):
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
             prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
         ),
         'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
             stride_level=DOMAIN_CONF['depth']['stride_level'],
             patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
             prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length
-        )
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
+        ),
+        
     }
 
     print(f"Creating model: {args.model}", "for PEFT")
@@ -566,7 +567,7 @@ def main(args):
                 p.requires_grad = False
                 
         for name, param in model.named_parameters():
-            if any(substr in name for substr in ['output_adapters', 'bias']):
+            if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
                 param.requires_grad = True
 
     # check frozen well 
@@ -663,13 +664,16 @@ def main(args):
         print(f'* mIoU {miou:.3f} aAcc {a_acc:.3f} Acc {acc:.3f} Loss {loss:.3f}')
         exit(0)
 
+    print('output adapter not self attn mode : ' , args.not_self_attn )
+    
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_miou = 0.0
     max_delta_1  = 0.0
     
-    early_stopping_epochs = 10
-    best_loss = float('inf')
+    early_stopping_epochs = 5
+    best_miou = 0.0
+    best_delta_1 = 0.0
     early_stop_counter = 0
         
     for epoch in range(args.start_epoch, args.epochs):
@@ -727,12 +731,12 @@ def main(args):
                 print(f'Max mIoU: {max_miou:.3f}')
                 print(f'max_delta_1: {max_delta_1:.3f}')
                 
-            valid_loss = max_miou + max_delta_1
             
-            if valid_loss > best_loss:
+            if max_miou < best_miou or max_delta_1 < best_delta_1 or max_miou == None or max_delta_1 == None  :
                 early_stop_counter += 1
             else:
-                best_loss = valid_loss
+                max_miou = best_miou
+                max_delta_1 = best_delta_1
                 early_stop_counter = 0
 
             # 조기 종료 조건 확인
@@ -865,6 +869,9 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             if 'semseg' in tasks_dict:
                 seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
                 seg_loss = criterion(seg_pred, seg_gt)
+                
+            raw_parameter_seg = model.raw_parameter_seg
+            raw_parameter_depth = model.raw_parameter_depth
 
             optimizer.zero_grad()
 
@@ -873,8 +880,6 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             if 'depth' in tasks_dict:
                 depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None)
            
-            raw_parameter_seg = model.raw_parameter_seg
-            raw_parameter_depth = model.raw_parameter_depth
             #for weight 0~1!
             weight_seg = raw_parameter_seg
             weight_depth = raw_parameter_depth
@@ -893,13 +898,10 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
 
         trainable_params = [param for param in model.parameters() if param.requires_grad]
-        
-        torch.autograd.set_detect_anomaly(True)
 
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
                                 parameters=trainable_params, create_graph=is_second_order)
-        
-        
+   
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
@@ -1270,7 +1272,7 @@ if __name__ == '__main__':
         opts.output_dir = f'{opts.output_dir}-tmp'
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
     else:
-        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-task_prompt_lenth={opts.task_specific_prompt_length}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
+        opts.output_dir = f'{opts.output_dir}-mode={opts.prompt_mode}-length={opts.length}-img_size={opts.input_size}-not_self_attn={opts.not_self_attn}-task_prompt_lenth={opts.task_specific_prompt_length}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-drop_path_encoder={opts.drop_path_encoder}-aug={opts.aug_name}-color_augs={opts.color_augs}'
         opts.wandb_run_name = f'{opts.wandb_run_name}-mode{opts.output_dir}-length={opts.length}-img_size={opts.input_size}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-aug={opts.aug_name}'
 
     # Create output directory if it doesn't exist

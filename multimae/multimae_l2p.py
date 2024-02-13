@@ -119,7 +119,7 @@ class MultiMAE(nn.Module):
                           pool_size=pool_size,
                           prompt_pool=True,
                           top_k=top_k)
-                    for _ in range(depth)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                    for _ in range(3)  # 각 레이어에 대응하는 프롬프트 풀 초기화
                 ])
 
         # Initialize input and output adapters
@@ -526,7 +526,11 @@ class MultiViT(MultiMAE):
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
-        input_tokens = torch.cat([expanded_prompts_1,expanded_prompts_2 ,  input_tokens ], dim = 1)
+        #input_tokens = torch.cat([expanded_prompts_1,expanded_prompts_2 ,  input_tokens ], dim = 1)
+        
+        want_size = input_tokens.shape[1]
+        
+        original_tokens = input_tokens
         
         if self.prompt_deep:
            
@@ -544,22 +548,43 @@ class MultiViT(MultiMAE):
             #     input_tokens = layer(input_tokens)
                 
             for i, layer in enumerate(self.encoder):
-              if i==0 :
-                prompt_instance = self.layer_prompt_pools[i]
-                prompt_output = prompt_instance(input_tokens)
-                input_tokens = prompt_output['prompted_embedding']
-                input_tokens = self.prompt_dropout((input_tokens))
-                input_tokens = layer(input_tokens)  
-              else:
-                prompt_instance = self.layer_prompt_pools[i]
-                input_tokens = input_tokens[:, prompt_input_size:, :] 
-                prompt_output = prompt_instance(input_tokens)
-                input_tokens = prompt_output['prompted_embedding']
-                input_tokens = self.prompt_dropout((input_tokens))
-                input_tokens = layer(input_tokens)
+                
+                if i== 9 or i == 10 or i== 11 :
+                    prompt_instance = self.layer_prompt_pools[i-9]
+
+                    now_size = input_tokens.shape[1]
+                    delete_size = now_size - want_size 
+                    input_tokens = input_tokens[:, delete_size:, :] 
+                    
+                    task1_image = torch.cat([expanded_prompts_1, original_tokens ], dim = 1)
+                    task2_image = torch.cat([expanded_prompts_2, original_tokens ], dim = 1)
+                    
+                    task1_prompt_output = prompt_instance(task1_image)['prompted_embedding'][:,:prompt_input_size,:]
+                    task2_prompt_output = prompt_instance(task2_image)['prompted_embedding'][:,:prompt_input_size,:]
+                    
+                    input_tokens = torch.cat([task1_prompt_output, task2_prompt_output ,  input_tokens ], dim = 1)
+
+                    input_tokens = self.prompt_dropout((input_tokens))
+                    input_tokens = layer(input_tokens)  
+            
+                elif i == 0 or i == 1 or i == 2 :
+                    
+                    now_size = input_tokens.shape[1]
+                    delete_size = now_size - want_size 
+                    input_tokens = input_tokens[:, delete_size:, :] 
+                    input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
+                    
+                    input_tokens = self.prompt_dropout((input_tokens))
+                    input_tokens = layer(input_tokens)
+            
+                else:
+                    now_size = input_tokens.shape[1]
+                    delete_size = now_size - want_size 
+                    input_tokens = input_tokens[:, delete_size:, :] 
+                    input_tokens = layer(input_tokens)
             
             encoder_tokens = input_tokens
-
+            
         # Decode tokens for each task using task-specific output adapters
         preds = {
             domain: self.output_adapters[domain](
