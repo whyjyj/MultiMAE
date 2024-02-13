@@ -19,12 +19,12 @@ decoder_depth: 4
 # Train
 epochs: 1000
 opt: adamw
-lr: 0.00001 # = 1e-4
-warmup_lr: 0.0000001 # = 1e-6
-min_lr: 0.0000001
+lr: 0.000075 # = 1e-4
+warmup_lr: 0.00000075 # = 1e-6
+min_lr: 0.000001
 warmup_epochs: 15
-batch_size: 8
-input_size: 480
+batch_size: 13
+input_size: 336
 layer_decay: 0.9
 
 # Augmentation

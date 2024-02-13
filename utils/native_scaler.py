@@ -21,10 +21,11 @@ class NativeScalerWithGradNormCount:
     def __call__(self, loss, optimizer, clip_grad= 30 , skip_grad=None, parameters=None, create_graph= False, update_grad=True):
         
         torch.autograd.set_detect_anomaly(True)
+        
         try:
             self._scaler.scale(loss).backward(create_graph=create_graph)
-            
         except Exception as err:
+            
             pdb.set_trace()
             
         if update_grad:
@@ -43,6 +44,7 @@ class NativeScalerWithGradNormCount:
                 norm = get_grad_norm_(parameters)
             self._scaler.step(optimizer)
             self._scaler.update()
+
         else:
             norm = None
         return norm

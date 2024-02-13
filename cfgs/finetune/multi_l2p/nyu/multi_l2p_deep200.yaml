@@ -24,7 +24,7 @@ warmup_lr: 0.00000075 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
 batch_size: 4
-input_size: 608[]
+input_size: 608
 layer_decay: 0.9
 
 # Augmentation

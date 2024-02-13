@@ -100,6 +100,14 @@ class MultiMAE(nn.Module):
         self.task_specific_prompts_2 = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
         ,self.dim_tokens))
         
+        
+        #learnable weight
+        self.raw_parameter_seg = torch.nn.Parameter(torch.empty(1))
+        self.raw_parameter_depth = torch.nn.Parameter(torch.empty(1))
+        torch.nn.init.uniform_(self.raw_parameter_seg, a=0.2, b=1.0)
+        torch.nn.init.uniform_(self.raw_parameter_depth, a=0.2, b=1.0)
+
+
         #prompts
         # self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
         #                          top_k=self.top_k, pool_size=self.pool_size)
