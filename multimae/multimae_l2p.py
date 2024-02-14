@@ -119,7 +119,7 @@ class MultiMAE(nn.Module):
                           pool_size=pool_size,
                           prompt_pool=True,
                           top_k=top_k)
-                    for _ in range(3)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                    for _ in range(2)  # 각 레이어에 대응하는 프롬프트 풀 초기화
                 ])
 
         # Initialize input and output adapters
@@ -549,8 +549,8 @@ class MultiViT(MultiMAE):
                 
             for i, layer in enumerate(self.encoder):
                 
-                if i== 9 or i == 10 or i== 11 :
-                    prompt_instance = self.layer_prompt_pools[i-9]
+                if i== 0 or i == 1  :
+                    prompt_instance = self.layer_prompt_pools[i]
 
                     now_size = input_tokens.shape[1]
                     delete_size = now_size - want_size 
@@ -567,7 +567,7 @@ class MultiViT(MultiMAE):
                     input_tokens = self.prompt_dropout((input_tokens))
                     input_tokens = layer(input_tokens)  
             
-                elif i == 0 or i == 1 or i == 2 :
+                elif i == 2 or i == 3 or i == 4 :
                     
                     now_size = input_tokens.shape[1]
                     delete_size = now_size - want_size 
@@ -583,7 +583,7 @@ class MultiViT(MultiMAE):
                     input_tokens = input_tokens[:, delete_size:, :] 
                     input_tokens = layer(input_tokens)
             
-            encoder_tokens = input_tokens
+            encoder_tokens =  torch.cat([expanded_prompts_1,expanded_prompts_2,input_tokens], dim = 1)
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

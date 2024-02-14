@@ -528,11 +528,11 @@ class ConvNeXtAdapter(nn.Module):
         self.not_self_attn = not_self_attn
         
         #For attention (prompt pool + task specific prompt)
-        # self.query_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        # self.key_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        # self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.query_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.key_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
         
-        # self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
 
         #blocks
         self.blocks = nn.Sequential(*[
@@ -587,73 +587,57 @@ class ConvNeXtAdapter(nn.Module):
 
         # [2, task_specific_prompt_length, dim_tokens_enc]
         
-        total_prompts = 2* self.prompt_length * self.top_k
+        # total_prompts = 2* self.prompt_length * self.top_k
 
-        x = x[:,total_prompts:,:]
+        # x = x[:,total_prompts:,:]
         
         # expanded_prompts = self.task_specific_prompts.expand(x.size(0), -1, -1)
         
         # x = torch.cat([expanded_prompts, x], dim=1)
         #attention for task specific prompts
         
-        # if self.not_self_attn :
+        if self.not_self_attn :
             
-        #     if self.num_classes == 1: #depth
-        #         x =  x[:,2*self.task_specific_prompt_length:,:]
-        #         k_and_v= x[:,:self.task_specific_prompt_length,:]
+            if self.num_classes == 1: #depth
+                x =  x[:,2*self.task_specific_prompt_length:,:]
+                k_and_v= x[:,:self.task_specific_prompt_length,:]
         
-        #     elif self.num_classes == 40 :  #semseg
-        #         x = x[:,2*self.task_specific_prompt_length:,:]
-        #         k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
+            elif self.num_classes == 40 :  #semseg
+                x = x[:,2*self.task_specific_prompt_length:,:]
+                k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
             
-        #     query = self.query_projection(x)
-        #     key = self.key_projection(k_and_v)
-        #     value = self.value_projection(k_and_v)
+            query = self.query_projection(x)
+            key = self.key_projection(k_and_v)
+            value = self.value_projection(k_and_v)
 
-        #     scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-        #     attn = F.softmax(scores, dim=-1)
-        #     context = torch.matmul(attn, value)
+            scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+            attn = F.softmax(scores, dim=-1)
+            context = torch.matmul(attn, value)
             
-        #     final_prompts = self.out_projection(context) # B x promt_length(25) x 768
-            
-        #     x = self.proj_dec(final_prompts)
-            
-        #     x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
-        #     x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-        #                 nh=N_H, nw=N_W,
-        #                 ph=int(self.preds_per_patch ** 0.5),
-        #                 pw=int(self.preds_per_patch ** 0.5))
-        #     x = self.blocks(x)
-            
-        #     x = self.final_layer(x)
-            
-        #     # Interpolate to semseg res
-        #     x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode)
-
-        #     return x
+            final_prompts = self.out_projection(context) # B x promt_length(25) x 768
                 
-        # else : #self attention
+        else : #self attention
             
-        #     if self.num_classes == 1: #depth
-        #         x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
+            if self.num_classes == 1: #depth
+                x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
       
-        #     elif self.num_classes == 40 :  #semseg
-        #         x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
+            elif self.num_classes == 40 :  #semseg
+                x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
   
             
-        #     query = self.query_projection(x)
-        #     key = self.key_projection(x)
-        #     value = self.value_projection(x)
+            query = self.query_projection(x)
+            key = self.key_projection(x)
+            value = self.value_projection(x)
 
-        #     scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-        #     attn = F.softmax(scores, dim=-1)
-        #     context = torch.matmul(attn, value)
+            scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+            attn = F.softmax(scores, dim=-1)
+            context = torch.matmul(attn, value)
             
-        #     final_prompts = self.out_projection(context) # B x promt_length(25) x 768
+            final_prompts = self.out_projection(context) # B x promt_length(25) x 768
             
-        #     final_prompts = final_prompts[:,self.task_specific_prompt_length:,:]
+            final_prompts = final_prompts[:,self.task_specific_prompt_length:,:]
 
-        x = self.proj_dec(x)
+        x = self.proj_dec(final_prompts)
             
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",

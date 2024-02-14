@@ -37,7 +37,7 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 15
+eval_freq: 10
 
 # Misc.
 find_unused_params: False
@@ -49,8 +49,8 @@ prompt_shallow : False
 prompt_deep : True
 top_k : 5
 size : 10
-length : 20
-task_specific_prompt_length : 10
+length : 5
+task_specific_prompt_length : 5
 not_self_attn : False
 
 # Wandb and l0ogging

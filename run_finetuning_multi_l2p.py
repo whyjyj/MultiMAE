@@ -340,7 +340,7 @@ def get_args():
     parser.add_argument('--shared_prompt_pool', default=False, type=bool)
     parser.add_argument('--shared_prompt_key', default=False, type=bool)
     parser.add_argument('--batchwise_prompt', default=True, type=bool)
-    parser.add_argument('--embedding_key', default='mean_max', type=str)
+    parser.add_argument('--embedding_key', default='max', type=str)
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)

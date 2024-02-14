@@ -10,7 +10,7 @@ in_domains: rgb
 model: multivit_base
 patch_size: 16
 num_global_tokens: 0
-drop_path_encoder: 0.1
+drop_path_encoder: 0.5
 output_adapter: convnext
 decoder_dim: 6144
 decoder_preds_per_patch: 16
@@ -19,12 +19,12 @@ decoder_depth: 4
 # Train
 epochs: 600
 opt: adamw
-lr: 0.005 # = 1e-4
-warmup_lr: 0.00005 # = 1e-6
+lr: 0.0003 # = 1e-4
+warmup_lr: 0.000003 # = 1e-6
 min_lr: 0.000001
-warmup_epochs: 15
-batch_size: 28
-input_size: 256
+warmup_epochs: 1
+batch_size: 8
+input_size: 448
 layer_decay: 0.2
 
 # Augmentation
@@ -37,7 +37,7 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 15
+eval_freq: 10
 
 # Misc.
 find_unused_params: False
@@ -49,7 +49,7 @@ prompt_shallow : False
 prompt_deep : True
 top_k : 5
 size : 10
-length : 5
+length : 20
 task_specific_prompt_length : 200
 not_self_attn : False
 
