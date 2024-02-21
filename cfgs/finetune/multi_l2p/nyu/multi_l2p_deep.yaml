@@ -10,7 +10,7 @@ in_domains: rgb
 model: multivit_base
 patch_size: 16
 num_global_tokens: 0
-drop_path_encoder: 0.5
+drop_path_encoder: 0.0
 output_adapter: convnext
 decoder_dim: 6144
 decoder_preds_per_patch: 16
@@ -50,7 +50,7 @@ prompt_deep : True
 top_k : 5
 size : 10
 length : 5
-task_specific_prompt_length : 5
+task_specific_prompt_length : 20
 not_self_attn : False
 
 # Wandb and l0ogging

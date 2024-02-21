@@ -581,9 +581,9 @@ class ConvNeXtAdapter(nn.Module):
 
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
-
-        x = self.adapt_tokens(encoder_tokens, input_info)
         
+        x = self.adapt_tokens(encoder_tokens, input_info)
+        x = x[:,2* self.task_specific_prompt_length:,:]
 
         # [2, task_specific_prompt_length, dim_tokens_enc]
         
@@ -624,12 +624,17 @@ class ConvNeXtAdapter(nn.Module):
             elif self.num_classes == 40 :  #semseg
                 x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
   
-            
             query = self.query_projection(x)
             key = self.key_projection(x)
             value = self.value_projection(x)
 
             scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+            
+            # add mask to make 
+            # mask = torch.zeros_like(scores, dtype=torch.bool)
+            # mask[:, :self.task_specific_prompt_length, :] = True
+            # scores = scores.masked_fill(mask, float('-inf'))
+
             attn = F.softmax(scores, dim=-1)
             context = torch.matmul(attn, value)
             
@@ -637,8 +642,9 @@ class ConvNeXtAdapter(nn.Module):
             
             final_prompts = final_prompts[:,self.task_specific_prompt_length:,:]
 
+        
         x = self.proj_dec(final_prompts)
-            
+       
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
                         nh=N_H, nw=N_W,
